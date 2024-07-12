@@ -1,10 +1,14 @@
-image: "gitpod/workspace-node:latest"
+image: "gitpod/workspace-bun"
 
 tasks:
-  - init: "yarn install"
+  - name: "Install dependencies"
+    before: |
+      curl -L https://foundry.paradigm.xyz | bash
+      source ~/.bashrc
+      foundryup
+    init: "bun install"
 
 vscode:
   extensions:
     - "esbenp.prettier-vscode"
     - "NomicFoundation.hardhat-solidity"
-    - "ritwickdey.LiveServer"
