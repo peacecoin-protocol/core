@@ -9,6 +9,7 @@
   gas_reports = ["*"]
   optimizer = true
   optimizer_runs = 10_000
+  via_ir = true
   out = "out"
   script = "script"
   solc = "0.8.26"
@@ -24,7 +25,6 @@ libs = ["node_modules", "lib"]
   arbitrum = { key = "${API_KEY_ARBISCAN}" }
   avalanche = { key = "${API_KEY_SNOWTRACE}" }
   base = { key = "${API_KEY_BASESCAN}" }
-  bnb_smart_chain = { key = "${API_KEY_BSCSCAN}" }
   gnosis_chain = { key = "${API_KEY_GNOSISSCAN}" }
   goerli = { key = "${API_KEY_ETHERSCAN}" }
   mainnet = { key = "${API_KEY_ETHERSCAN}" }
@@ -53,4 +53,5 @@ libs = ["node_modules", "lib"]
   mainnet = "https://eth-mainnet.g.alchemy.com/v2/${API_KEY_ALCHEMY}"
   optimism = "https://optimism-mainnet.infura.io/v3/${API_KEY_INFURA}"
   polygon = "https://polygon-mainnet.infura.io/v3/${API_KEY_INFURA}"
+  amoy = "https://polygon-amoy.infura.io/v3/${API_KEY_INFURA}"
   sepolia = "https://sepolia.infura.io/v3/${API_KEY_INFURA}"

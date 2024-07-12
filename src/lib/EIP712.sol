@@ -21,8 +21,7 @@
  * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
  * SOFTWARE.
  */
-
-pragma solidity 0.8.19;
+pragma solidity 0.8.26;
 
 import { ECRecover } from "./ECRecover.sol";
 
@@ -41,16 +40,11 @@ library EIP712 {
      * @return Domain separator
      */
     function makeDomainSeparator(string memory name, string memory version) internal view returns (bytes32) {
-        return
-            keccak256(
-                abi.encode(
-                    EIP712_DOMAIN_TYPEHASH,
-                    keccak256(bytes(name)),
-                    keccak256(bytes(version)),
-                    block.chainid,
-                    address(this)
-                )
-            );
+        return keccak256(
+            abi.encode(
+                EIP712_DOMAIN_TYPEHASH, keccak256(bytes(name)), keccak256(bytes(version)), block.chainid, address(this)
+            )
+        );
     }
 
     /**
@@ -68,7 +62,11 @@ library EIP712 {
         bytes32 r,
         bytes32 s,
         bytes memory typeHashAndData
-    ) internal pure returns (address) {
+    )
+        internal
+        pure
+        returns (address)
+    {
         bytes32 digest = keccak256(abi.encodePacked("\x19\x01", domainSeparator, keccak256(typeHashAndData)));
         return ECRecover.recover(digest, v, r, s);
     }

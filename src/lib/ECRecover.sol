@@ -22,8 +22,7 @@
  * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
  * SOFTWARE.
  */
-
-pragma solidity 0.8.19;
+pragma solidity 0.8.26;
 
 /**
  * @title ECRecover
@@ -33,7 +32,8 @@ library ECRecover {
     // solhint-disable max-line-length
     /**
      * @notice Recover signer's address from a signed message
-     * @dev Adapted from: https://github.com/OpenZeppelin/openzeppelin-contracts/blob/65e4ffde586ec89af3b7e9140bdc9235d1254853/contracts/cryptography/ECDSA.sol
+     * @dev Adapted from:
+     * https://github.com/OpenZeppelin/openzeppelin-contracts/blob/65e4ffde586ec89af3b7e9140bdc9235d1254853/contracts/cryptography/ECDSA.sol
      * Modifications: Accept v, r, and s as separate arguments
      * @param digest    Keccak-256 hash digest of the signed message
      * @param v         v of the signature

@@ -1,13 +1,11 @@
 // SPDX-License-Identifier: MIT
-pragma solidity 0.8.19;
+pragma solidity 0.8.26;
 
-import { IERC20Internal } from "./IERC20Internal.sol";
+import { ERC20Upgradeable } from "@openzeppelin/contracts-upgradeable/token/ERC20/ERC20Upgradeable.sol";
 import { EIP712Domain } from "./EIP712Domain.sol";
 import { EIP712 } from "./EIP712.sol";
 
-import { console } from "hardhat/console.sol";
-
-abstract contract EIP3009 is IERC20Internal, EIP712Domain {
+abstract contract EIP3009 is ERC20Upgradeable, EIP712Domain {
     /*
         keccak256(
             "TransferWithAuthorization(address from,address to,
@@ -46,7 +44,9 @@ abstract contract EIP3009 is IERC20Internal, EIP712Domain {
         uint8 v,
         bytes32 r,
         bytes32 s
-    ) public virtual;
+    )
+        public
+        virtual;
 
     function _transferWithAuthorization(
         address from,
@@ -59,20 +59,15 @@ abstract contract EIP3009 is IERC20Internal, EIP712Domain {
         bytes32 r,
         bytes32 s,
         uint256 rawAmount
-    ) internal {
+    )
+        internal
+    {
         require(block.timestamp > validAfter, "Not yet valid");
         require(block.timestamp < validBefore, "Authorization expired");
         require(!_authorizationStates[from][nonce], "Authorization used");
 
-        bytes memory data = abi.encode(
-            TRANSFER_WITH_AUTHORIZATION_TYPEHASH,
-            from,
-            to,
-            value,
-            validAfter,
-            validBefore,
-            nonce
-        );
+        bytes memory data =
+            abi.encode(TRANSFER_WITH_AUTHORIZATION_TYPEHASH, from, to, value, validAfter, validBefore, nonce);
         require(
             EIP712.recover(EIP712.makeDomainSeparator("PeaceBaseCoin", "1"), v, r, s, data) == from,
             "EIP3009: invalid signature"
