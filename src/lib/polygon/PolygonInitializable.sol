@@ -2,7 +2,7 @@
 pragma solidity 0.8.26;
 
 contract PolygonInitializable {
-    bool inited = false;
+    bool inited;
 
     modifier polygonInitializer() {
         require(!inited, "already inited");

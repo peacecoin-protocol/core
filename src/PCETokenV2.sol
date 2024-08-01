@@ -13,7 +13,9 @@ import { Utils } from "./lib/Utils.sol";
 import { ExchangeAllowMethod } from "./lib/Enum.sol";
 import { NativeMetaTransaction } from "./lib/polygon/NativeMetaTransaction.sol";
 
-contract PCEToken is
+/// @custom:oz-upgrades-from PCEToken
+
+contract PCETokenV2 is
     UUPSUpgradeable,
     Initializable,
     ERC20Upgradeable,
@@ -55,31 +57,7 @@ contract PCEToken is
     uint256 public lastDecreaseTime;
     uint256 public lastModifiedFactor;
 
-    function initialize(
-        string memory _name,
-        string memory _symbol,
-        address communityTokenAddress,
-        address _polygonChainManager
-    )
-        public
-        initializer
-    {
-        __ERC20_init(_name, _symbol);
-        __Ownable_init(_msgSender());
-        _mint(_msgSender(), 10_000 * INITIAL_FACTOR);
-        // initial rate is 1(NativeToken):5(PCEToken) = 5<<96 = 396140812571321687967719751680
-        nativeTokenToPceTokenRate = 396_140_812_571_321_687_967_719_751_680;
-        metaTransactionGas = 200_000;
-        metaTransactionPriorityFee = 50_000_000_000; // 50 gwei
-        swapableToPCERate = 300; // 300BP is 3%
-        swapableToPCEIndividualRate = 300; // 300BP is 3%
-
-        _communityTokenAddress = communityTokenAddress;
-        epochTime = block.timestamp;
-        lastDecreaseTime = block.timestamp;
-        lastModifiedFactor = INITIAL_FACTOR;
-        polygonChainManager = _polygonChainManager;
-    }
+    function initialize() public initializer { }
 
     function getLocalToken(address communityToken) public view returns (Utils.LocalToken memory) {
         return localTokens[communityToken];
@@ -351,6 +329,6 @@ contract PCEToken is
     function _authorizeUpgrade(address newImplementation) internal virtual override onlyOwner { }
 
     function version() public pure returns (string memory) {
-        return "1.0.0";
+        return "1.0.1";
     }
 }
