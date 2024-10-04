@@ -12,7 +12,7 @@ import { EIP3009 } from "./lib/EIP3009.sol";
 import { TokenSetting } from "./lib/TokenSetting.sol";
 import { ExchangeAllowMethod } from "./lib/Enum.sol";
 
-import { console2 } from "forge-std/src/console2.sol";
+import { console2 } from "forge-std/console2.sol";
 
 contract PCECommunityToken is
     Initializable,
@@ -461,5 +461,9 @@ contract PCECommunityToken is
 
         return
             rawBalanceToDisplayBalance(accountInfo.midnightBalance * pceToken.swapableToPCEIndividualRate() / BP_BASE);
+    }
+
+    function version() public pure returns (string memory) {
+        return "1.0.0";
     }
 }

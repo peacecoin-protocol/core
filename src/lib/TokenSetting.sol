@@ -5,9 +5,9 @@ import { OwnableUpgradeable } from "@openzeppelin/contracts-upgradeable/access/O
 import { ExchangeAllowMethod } from "./Enum.sol";
 
 contract TokenSetting is OwnableUpgradeable {
-    uint256 public decreaseIntervalDays = 0;
-    uint256 public lastDecreaseTime = 0;
-    uint16 public afterDecreaseBp = 0;
+    uint256 public decreaseIntervalDays;
+    uint256 public lastDecreaseTime;
+    uint16 public afterDecreaseBp;
     // Bp is 1/10000
     uint16 public maxIncreaseOfTotalSupplyBp;
     uint16 public maxIncreaseBp;
@@ -19,8 +19,8 @@ contract TokenSetting is OwnableUpgradeable {
     uint256 public mintArigatoCreationToday;
     uint256 public mintArigatoCreationTodayForGuest;
 
-    ExchangeAllowMethod public incomeExchangeAllowMethod = ExchangeAllowMethod.None;
-    ExchangeAllowMethod public outgoExchangeAllowMethod = ExchangeAllowMethod.None;
+    ExchangeAllowMethod public incomeExchangeAllowMethod;
+    ExchangeAllowMethod public outgoExchangeAllowMethod;
 
     address[] public incomeTargetTokens;
     address[] public outgoTargetTokens;
