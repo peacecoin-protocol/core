@@ -8,8 +8,10 @@ import { Upgrades } from "openzeppelin-foundry-upgrades/Upgrades.sol";
 /// @dev See the Solidity Scripting tutorial: https://book.getfoundry.sh/tutorials/solidity-scripting
 contract Upgrade is BaseScript {
     function run() public broadcast {
-        address pceTokenAddress = 0x3Aa5ebB10DC797CAC828524e59A333d0A371443c;
+        address pceTokenAddress = 0x70e0bA845a1A0F2DA3359C97E0285013525FFC49;
+        address pceCommunityTokenAddress = 0x95401dc811bb5740090279Ba06cfA8fcF6113778;
 
         Upgrades.upgradeProxy(pceTokenAddress, "PCETokenV2.sol:PCETokenV2", "");
+        Upgrades.upgradeBeacon(pceCommunityTokenAddress, "PCECommunityTokenV2.sol:PCECommunityTokenV2");
     }
 }

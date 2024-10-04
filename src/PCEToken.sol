@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
 pragma solidity 0.8.26;
 
+import { BeaconProxy } from "@openzeppelin/contracts/proxy/beacon/BeaconProxy.sol";
 import { UUPSUpgradeable } from "@openzeppelin/contracts/proxy/utils/UUPSUpgradeable.sol";
 import { ERC20Upgradeable } from "@openzeppelin/contracts-upgradeable/token/ERC20/ERC20Upgradeable.sol";
 import { OwnableUpgradeable } from "@openzeppelin/contracts-upgradeable/access/OwnableUpgradeable.sol";
@@ -168,9 +169,12 @@ contract PCEToken is
 
         updateFactorIfNeeded();
 
-        address newTokenAddress = Clones.clone(_communityTokenAddress);
+        BeaconProxy proxy = new BeaconProxy(
+            _communityTokenAddress,
+            abi.encodeWithSelector(PCECommunityToken(address(0)).initialize.selector, name, symbol, lastModifiedFactor)
+        );
+        address newTokenAddress = address(proxy);
         PCECommunityToken newToken = PCECommunityToken(newTokenAddress);
-        newToken.initialize(name, symbol, lastModifiedFactor);
         newToken.setTokenSettings(
             decreaseIntervalDays,
             afterDecreaseBp,
