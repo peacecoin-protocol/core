@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: UNLICENSED
-pragma solidity >=0.8.26 <0.9.0;
+pragma solidity 0.8.26;
 
 import { PCEToken } from "../src/PCEToken.sol";
 import { PCECommunityToken } from "../src/PCECommunityToken.sol";
