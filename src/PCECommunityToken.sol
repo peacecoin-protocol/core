@@ -279,6 +279,22 @@ contract PCECommunityToken is
         return ret;
     }
 
+    function _spendAllowance(address owner, address spender, uint256 value) internal virtual override {
+        // PCECommunityToken's change
+        // get raw allowance
+        // - uint256 currentAllowance = allowance(owner, spender);
+        // + uint256 currentAllowance = super.allowance(owner, spender);
+        uint256 currentAllowance = super.allowance(owner, spender);
+        if (currentAllowance != type(uint256).max) {
+            if (currentAllowance < value) {
+                revert ERC20InsufficientAllowance(spender, currentAllowance, value);
+            }
+            unchecked {
+                _approve(owner, spender, currentAllowance - value, false);
+            }
+        }
+    }
+
     function transferFrom(address sender, address receiver, uint256 displayBalance) public override returns (bool) {
         updateFactorIfNeeded();
         uint256 rawBalance = super.balanceOf(sender);
