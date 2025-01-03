@@ -67,7 +67,7 @@ contract PCEToken is
     {
         __ERC20_init(_name, _symbol);
         __Ownable_init(_msgSender());
-        _mint(_msgSender(), 10_000 * INITIAL_FACTOR);
+        _mint(_msgSender(), 10_000_000 * INITIAL_FACTOR);
         // initial rate is 1(NativeToken):5(PCEToken) = 5<<96 = 396140812571321687967719751680
         nativeTokenToPceTokenRate = 396_140_812_571_321_687_967_719_751_680;
         metaTransactionGas = 200_000;
@@ -131,13 +131,6 @@ contract PCEToken is
 
     function getTokens() public view returns (address[] memory) {
         return tokens;
-    }
-
-    // for DEV
-    function faucet() public returns (bool) {
-        _mint(msg.sender, 10_000 * INITIAL_FACTOR);
-
-        return true;
     }
 
     function setCommunityTokenAddress(address communityTokenAddress) external onlyOwner {
