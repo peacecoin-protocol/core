@@ -49,6 +49,7 @@ contract PCECommunityToken is
     function initialize(string memory name, string memory symbol, uint256 _initialFactor) public initializer {
         __ERC20_init(name, symbol);
         __Ownable_init(_msgSender());
+        __ERC20Permit_init(name);
         pceAddress = _msgSender();
         epochTime = block.timestamp;
         lastDecreaseTime = block.timestamp;
