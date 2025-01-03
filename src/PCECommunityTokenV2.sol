@@ -6,9 +6,10 @@ import { ERC20BurnableUpgradeable } from
     "@openzeppelin/contracts-upgradeable/token/ERC20/extensions/ERC20BurnableUpgradeable.sol";
 import { Initializable } from "@openzeppelin/contracts-upgradeable/proxy/utils/Initializable.sol";
 import { OwnableUpgradeable } from "@openzeppelin/contracts-upgradeable/access/OwnableUpgradeable.sol";
+import { ERC20PermitUpgradeable } from "@openzeppelin/contracts-upgradeable/token/ERC20/extensions/ERC20PermitUpgradeable.sol";
 import { PCEToken } from "./PCEToken.sol";
 import { Utils } from "./lib/Utils.sol";
-import { EIP3009 } from "./lib/EIP3009.sol";
+import { EIP3009V2 } from "./lib/EIP3009V2.sol";
 import { TokenSetting } from "./lib/TokenSetting.sol";
 import { ExchangeAllowMethod } from "./lib/Enum.sol";
 
@@ -21,7 +22,8 @@ contract PCECommunityTokenV2 is
     ERC20Upgradeable,
     ERC20BurnableUpgradeable,
     OwnableUpgradeable,
-    EIP3009,
+    EIP3009V2,
+    ERC20PermitUpgradeable,
     TokenSetting
 {
     uint256 public constant INITIAL_FACTOR = 10 ** 18;
@@ -450,6 +452,28 @@ contract PCECommunityTokenV2 is
         _mintArigatoCreation(from, rawAmount, rawBalance, 1);
     }
 
+    function approveWithAuthorization(
+        address owner,
+        address spender,
+        uint256 displayBalance,
+        uint256 validAfter,
+        uint256 validBefore,
+        bytes32 nonce,
+        uint8 v,
+        bytes32 r,
+        bytes32 s
+    ) public {
+        updateFactorIfNeeded();
+        uint256 rawAmount = displayBalanceToRawBalance(displayBalance);
+        uint256 displayFee = getMetaTransactionFee();
+        uint256 rawFee = displayBalanceToRawBalance(displayFee);
+
+        _approveWithAuthorization(owner, spender, displayBalance, validAfter, validBefore, nonce, v, r, s, rawAmount);
+        super._transfer(owner, _msgSender(), rawFee);
+
+        emit MetaTransactionFeeCollected(owner, _msgSender(), displayFee, rawFee);
+    }
+
     /*
         @notice Returns the total balance that can be swapped to PCE today
         The balance is 0.01 times the total supply at UTC 0
@@ -474,6 +498,6 @@ contract PCECommunityTokenV2 is
     }
 
     function version() public pure returns (string memory) {
-        return "1.0.1";
+        return "2.0.0";
     }
 }
