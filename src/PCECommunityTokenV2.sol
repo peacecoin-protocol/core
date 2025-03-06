@@ -6,7 +6,8 @@ import { ERC20BurnableUpgradeable } from
     "@openzeppelin/contracts-upgradeable/token/ERC20/extensions/ERC20BurnableUpgradeable.sol";
 import { Initializable } from "@openzeppelin/contracts-upgradeable/proxy/utils/Initializable.sol";
 import { OwnableUpgradeable } from "@openzeppelin/contracts-upgradeable/access/OwnableUpgradeable.sol";
-import { PCEToken } from "./PCEToken.sol";
+import { ERC20PermitUpgradeable } from "@openzeppelin/contracts-upgradeable/token/ERC20/extensions/ERC20PermitUpgradeable.sol";
+import { PCETokenV2 } from "./PCETokenV2.sol";
 import { Utils } from "./lib/Utils.sol";
 import { EIP3009 } from "./lib/EIP3009.sol";
 import { TokenSetting } from "./lib/TokenSetting.sol";
@@ -22,6 +23,7 @@ contract PCECommunityTokenV2 is
     ERC20BurnableUpgradeable,
     OwnableUpgradeable,
     EIP3009,
+    ERC20PermitUpgradeable,
     TokenSetting
 {
     uint256 public constant INITIAL_FACTOR = 10 ** 18;
