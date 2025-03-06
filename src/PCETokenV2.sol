@@ -13,6 +13,7 @@ import { PCECommunityTokenV2 } from "./PCECommunityTokenV2.sol";
 import { Utils } from "./lib/Utils.sol";
 import { ExchangeAllowMethod } from "./lib/Enum.sol";
 import { NativeMetaTransaction } from "./lib/polygon/NativeMetaTransaction.sol";
+import { Math } from "@openzeppelin/contracts/utils/math/Math.sol";
 
 /// @custom:oz-upgrades-from PCEToken
 
@@ -69,7 +70,7 @@ contract PCETokenV2 is
             return 0;
         }
         if (hasDecreaseTimeWithin(lastDecreaseTime, block.timestamp)) {
-            return (lastModifiedFactor * DECREASE_RATE) / DECREASE_RATE_BASE;
+            return Math.mulDiv(lastModifiedFactor, DECREASE_RATE, DECREASE_RATE_BASE);
         } else {
             return lastModifiedFactor;
         }
@@ -142,7 +143,12 @@ contract PCETokenV2 is
 
         BeaconProxy proxy = new BeaconProxy(
             _communityTokenAddress,
-            abi.encodeWithSelector(PCECommunityTokenV2(address(0)).initialize.selector, name, symbol, lastModifiedFactor)
+            abi.encodeWithSelector(
+                PCECommunityTokenV2(address(0)).initialize.selector,
+                name,
+                symbol,
+                lastModifiedFactor
+            )
         );
         address newTokenAddress = address(proxy);
         PCECommunityTokenV2 newToken = PCECommunityTokenV2(newTokenAddress);
@@ -200,9 +206,11 @@ contract PCETokenV2 is
         PCECommunityTokenV2 target = PCECommunityTokenV2(toToken);
         target.updateFactorIfNeeded();
 
-        uint256 targetTokenAmount = (
-            ((amountToSwap * localTokens[toToken].exchangeRate) / INITIAL_FACTOR) * target.getCurrentFactor()
-        ) / lastModifiedFactor;
+        uint256 targetTokenAmount = Math.mulDiv(
+            Math.mulDiv(amountToSwap, localTokens[toToken].exchangeRate, INITIAL_FACTOR),
+            target.getCurrentFactor(),
+            lastModifiedFactor
+        );
         require(targetTokenAmount > 0, "Invalid amount to swap");
 
         _transfer(_msgSender(), address(this), amountToSwap);
@@ -222,9 +230,11 @@ contract PCETokenV2 is
 
         require(target.balanceOf(_msgSender()) >= amountToSwap, "Insufficient balance");
 
-        uint256 pcetokenAmount = (
-            ((amountToSwap * INITIAL_FACTOR) / localTokens[fromToken].exchangeRate) * lastModifiedFactor
-        ) / target.getCurrentFactor();
+        uint256 pcetokenAmount = Math.mulDiv(
+            Math.mulDiv(amountToSwap, INITIAL_FACTOR, localTokens[fromToken].exchangeRate),
+            lastModifiedFactor,
+            target.getCurrentFactor()
+        );
         require(pcetokenAmount > 0, "Target token deposit low");
 
         require(target.getTodaySwapableToPCEBalance() >= amountToSwap, "Insufficient balance");
@@ -269,7 +279,7 @@ contract PCETokenV2 is
     */
     function getMetaTransactionFee() public view returns (uint256) {
         uint256 nativeTokenFee = metaTransactionGas * (block.basefee + metaTransactionPriorityFee);
-        return (nativeTokenFee * getNativeTokenToPceTokenRate()) >> 96;
+        return Math.mulDiv(nativeTokenFee, getNativeTokenToPceTokenRate(), 2**96);
     }
 
     function hasDecreaseTimeWithin(uint256 _start, uint256 _end) public pure returns (bool) {
