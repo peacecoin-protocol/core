@@ -9,10 +9,11 @@ import { Initializable } from "@openzeppelin/contracts-upgradeable/proxy/utils/I
 import { ERC20BurnableUpgradeable } from
     "@openzeppelin/contracts-upgradeable/token/ERC20/extensions/ERC20BurnableUpgradeable.sol";
 import { Clones } from "@openzeppelin/contracts/proxy/Clones.sol";
-import { PCECommunityToken } from "./PCECommunityToken.sol";
+import { PCECommunityTokenV2 } from "./PCECommunityTokenV2.sol";
 import { Utils } from "./lib/Utils.sol";
 import { ExchangeAllowMethod } from "./lib/Enum.sol";
 import { NativeMetaTransaction } from "./lib/polygon/NativeMetaTransaction.sol";
+import { Math } from "@openzeppelin/contracts/utils/math/Math.sol";
 
 /// @custom:oz-upgrades-from PCEToken
 
@@ -69,7 +70,7 @@ contract PCETokenV2 is
             return 0;
         }
         if (hasDecreaseTimeWithin(lastDecreaseTime, block.timestamp)) {
-            return (lastModifiedFactor * DECREASE_RATE) / DECREASE_RATE_BASE;
+            return Math.mulDiv(lastModifiedFactor, DECREASE_RATE, DECREASE_RATE_BASE);
         } else {
             return lastModifiedFactor;
         }
@@ -111,13 +112,6 @@ contract PCETokenV2 is
         return tokens;
     }
 
-    // for DEV
-    function faucet() public returns (bool) {
-        _mint(msg.sender, 10_000 * INITIAL_FACTOR);
-
-        return true;
-    }
-
     function setCommunityTokenAddress(address communityTokenAddress) external onlyOwner {
         _communityTokenAddress = communityTokenAddress;
     }
@@ -149,10 +143,15 @@ contract PCETokenV2 is
 
         BeaconProxy proxy = new BeaconProxy(
             _communityTokenAddress,
-            abi.encodeWithSelector(PCECommunityToken(address(0)).initialize.selector, name, symbol, lastModifiedFactor)
+            abi.encodeWithSelector(
+                PCECommunityTokenV2(address(0)).initialize.selector,
+                name,
+                symbol,
+                lastModifiedFactor
+            )
         );
         address newTokenAddress = address(proxy);
-        PCECommunityToken newToken = PCECommunityToken(newTokenAddress);
+        PCECommunityTokenV2 newToken = PCECommunityTokenV2(newTokenAddress);
         newToken.setTokenSettings(
             decreaseIntervalDays,
             afterDecreaseBp,
@@ -193,7 +192,7 @@ contract PCETokenV2 is
     function getSwapRate(address toToken) public view returns (uint256) {
         require(localTokens[toToken].isExists, "Target token not found");
 
-        PCECommunityToken target = PCECommunityToken(toToken);
+        PCECommunityTokenV2 target = PCECommunityTokenV2(toToken);
 
         return (((localTokens[toToken].exchangeRate << 96) / INITIAL_FACTOR) * target.getCurrentFactor())
             / lastModifiedFactor;
@@ -204,12 +203,14 @@ contract PCETokenV2 is
         require(localTokens[toToken].isExists, "Target token not found");
         require(balanceOf(_msgSender()) >= amountToSwap, "Not enough PCEToken balance");
 
-        PCECommunityToken target = PCECommunityToken(toToken);
+        PCECommunityTokenV2 target = PCECommunityTokenV2(toToken);
         target.updateFactorIfNeeded();
 
-        uint256 targetTokenAmount = (
-            ((amountToSwap * localTokens[toToken].exchangeRate) / INITIAL_FACTOR) * target.getCurrentFactor()
-        ) / lastModifiedFactor;
+        uint256 targetTokenAmount = Math.mulDiv(
+            Math.mulDiv(amountToSwap, localTokens[toToken].exchangeRate, INITIAL_FACTOR),
+            target.getCurrentFactor(),
+            lastModifiedFactor
+        );
         require(targetTokenAmount > 0, "Invalid amount to swap");
 
         _transfer(_msgSender(), address(this), amountToSwap);
@@ -224,14 +225,16 @@ contract PCETokenV2 is
         updateFactorIfNeeded();
         require(localTokens[fromToken].isExists, "Target token not found");
 
-        PCECommunityToken target = PCECommunityToken(fromToken);
+        PCECommunityTokenV2 target = PCECommunityTokenV2(fromToken);
         target.updateFactorIfNeeded();
 
         require(target.balanceOf(_msgSender()) >= amountToSwap, "Insufficient balance");
 
-        uint256 pcetokenAmount = (
-            ((amountToSwap * INITIAL_FACTOR) / localTokens[fromToken].exchangeRate) * lastModifiedFactor
-        ) / target.getCurrentFactor();
+        uint256 pcetokenAmount = Math.mulDiv(
+            Math.mulDiv(amountToSwap, INITIAL_FACTOR, localTokens[fromToken].exchangeRate),
+            lastModifiedFactor,
+            target.getCurrentFactor()
+        );
         require(pcetokenAmount > 0, "Target token deposit low");
 
         require(target.getTodaySwapableToPCEBalance() >= amountToSwap, "Insufficient balance");
@@ -276,7 +279,7 @@ contract PCETokenV2 is
     */
     function getMetaTransactionFee() public view returns (uint256) {
         uint256 nativeTokenFee = metaTransactionGas * (block.basefee + metaTransactionPriorityFee);
-        return (nativeTokenFee * getNativeTokenToPceTokenRate()) >> 96;
+        return Math.mulDiv(nativeTokenFee, getNativeTokenToPceTokenRate(), 2**96);
     }
 
     function hasDecreaseTimeWithin(uint256 _start, uint256 _end) public pure returns (bool) {
