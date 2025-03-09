@@ -11,7 +11,7 @@ contract Upgrade is BaseScript {
         address pceTokenAddress = 0xA4807a8C34353A5EA51aF073175950Cb6248dA7E;
         address pceCommunityTokenAddress = 0x6A73A610707C113F34D8B82498b6868e5f7FAA74;
 
-        Upgrades.upgradeProxy(pceTokenAddress, "PCETokenV2.sol:PCETokenV2", "");
-        Upgrades.upgradeBeacon(pceCommunityTokenAddress, "PCECommunityTokenV2.sol:PCECommunityTokenV2");
+        Upgrades.upgradeProxy(pceTokenAddress, "PCETokenV3.sol:PCETokenV3", "");
+        Upgrades.upgradeBeacon(pceCommunityTokenAddress, "PCECommunityTokenV3.sol:PCECommunityTokenV3");
     }
 }
