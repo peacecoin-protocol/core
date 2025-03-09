@@ -3,18 +3,23 @@ pragma solidity 0.8.26;
 
 import {Test, console2} from "forge-std/Test.sol";
 import {PCECommunityToken} from "../src/PCECommunityToken.sol";
+import {PCECommunityTokenV2} from "../src/PCECommunityTokenV2.sol";
+import {PCECommunityTokenV3} from "../src/PCECommunityTokenV3.sol";
 import {PCEToken} from "../src/PCEToken.sol";
+import {PCETokenV2} from "../src/PCETokenV2.sol";
+import {PCETokenV3} from "../src/PCETokenV3.sol";
 import {ExchangeAllowMethod} from "../src/lib/Enum.sol";
-import {UpgradeableBeacon} from "@openzeppelin/contracts/proxy/beacon/UpgradeableBeacon.sol";
+import {Upgrades} from "openzeppelin-foundry-upgrades/Upgrades.sol";
 
-contract PCECommunityTokenTest is Test {
-    PCEToken public pceToken;
-    PCECommunityToken public token;
+contract PCECommunityTokenV2Test is Test {
+    PCETokenV3 public pceToken;
+    PCECommunityTokenV3 public token;
     address public owner;
     address public user1;
     address public user2;
     uint256 public initialSupply = 10 ** 18;
 
+    // Custom error definitions
     error NoTokensCreated();
     error TokenCreationFailed();
 
@@ -23,25 +28,38 @@ contract PCECommunityTokenTest is Test {
         user1 = address(0x1);
         user2 = address(0x2);
 
-        // Using PCECommunityToken implementation
-        PCECommunityToken communityTokenImpl = new PCECommunityToken();
-
-        // Create UpgradeableBeacon
-        UpgradeableBeacon beacon = new UpgradeableBeacon(address(communityTokenImpl), owner);
-
-        // Create PCEToken
-        pceToken = new PCEToken();
-        pceToken.initialize("PCE Token", "PCE", address(beacon), owner);
-
-        // Create PCECommunityToken using PCEToken
+        // Deploy using OpenZeppelin Upgrades library
         vm.startPrank(owner);
+
+        // Deploy PCECommunityToken beacon
+        address pceCommunityTokenBeacon = Upgrades.deployBeacon(
+            "PCECommunityToken.sol:PCECommunityToken",
+            owner
+        );
+
+        // Deploy PCEToken UUPS proxy
+        address pceTokenProxy = Upgrades.deployUUPSProxy(
+            "PCEToken.sol:PCEToken",
+            abi.encodeCall(
+                PCEToken.initialize,
+                ("PCE Token", "PCE", pceCommunityTokenBeacon, address(0x687C1D2dd0F422421BeF7aC2a52f50e858CAA867))
+            )
+        );
+
+        // Upgrade to V2
+        Upgrades.upgradeBeacon(pceCommunityTokenBeacon, "PCECommunityTokenV2.sol:PCECommunityTokenV2");
+        Upgrades.upgradeProxy(pceTokenProxy, "PCETokenV2.sol:PCETokenV2", "");
+
+        // Upgrade to V3
+        Upgrades.upgradeBeacon(pceCommunityTokenBeacon, "PCECommunityTokenV3.sol:PCECommunityTokenV3");
+        Upgrades.upgradeProxy(pceTokenProxy, "PCETokenV3.sol:PCETokenV3", "");
+
+        // Cast as PCEToken
+        pceToken = PCETokenV3(pceTokenProxy);
+
+        // Create token
         address[] memory incomeTargetTokens = new address[](0);
         address[] memory outgoTargetTokens = new address[](0);
-
-        // Add debug information
-        console2.log("PCEToken address:", address(pceToken));
-        console2.log("Beacon address:", address(beacon));
-        console2.log("Owner address:", owner);
 
         try pceToken.createToken(
             "PCE Community Token",
@@ -59,7 +77,7 @@ contract PCECommunityTokenTest is Test {
             incomeTargetTokens,
             outgoTargetTokens
         ) {
-            console2.log("Token creation successful");
+            console2.log("Token creation successful with V1");
         } catch Error(string memory reason) {
             console2.log("Token creation failed with reason:", reason);
             revert(reason);
@@ -68,13 +86,19 @@ contract PCECommunityTokenTest is Test {
             console2.logBytes(lowLevelData);
             revert TokenCreationFailed();
         }
+
         vm.stopPrank();
+
+        // Add debug information
+        console2.log("PCEToken address:", address(pceToken));
+        console2.log("Beacon address:", pceCommunityTokenBeacon);
+        console2.log("Owner address:", owner);
 
         // Get the address of the created token
         address[] memory tokens = pceToken.getTokens();
         if (tokens.length == 0) revert NoTokensCreated();
         address tokenAddress = tokens[0];
-        token = PCECommunityToken(tokenAddress);
+        token = PCECommunityTokenV3(tokenAddress);
         console2.log("Community token address:", tokenAddress);
     }
 
@@ -178,14 +202,14 @@ contract PCECommunityTokenTest is Test {
     }
 
     // Test that small value transfers work correctly
-    function skip_testSmallValueTransfer() public {
+    function testSmallValueTransfer() public {
         uint256 smallMintAmount = 100 * 10**18;  // 100 tokens
         uint256 smallTransferAmount = 10 * 10**18;  // 10 tokens
         _testTransfer("small", smallMintAmount, smallTransferAmount);
     }
 
-    // This test will fail, so skip it. It will be fixed in V2.
-    function skip_testLargeValueTransfer() public {
+    // Test that medium value transfers work correctly
+    function testLargeValueTransfer() public {
         uint256 largeMintAmount = 10000000 * 10**18;  // 10000000 tokens
         uint256 largeTransferAmount = 100000 * 10**18;  // 100000 tokens
         _testTransfer("large", largeMintAmount, largeTransferAmount);
