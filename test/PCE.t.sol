@@ -5,15 +5,17 @@ import {Test, console2} from "forge-std/Test.sol";
 import {PCECommunityToken} from "../src/PCECommunityToken.sol";
 import {PCECommunityTokenV2} from "../src/PCECommunityTokenV2.sol";
 import {PCECommunityTokenV3} from "../src/PCECommunityTokenV3.sol";
+import {PCECommunityTokenV4} from "../src/PCECommunityTokenV4.sol";
 import {PCEToken} from "../src/PCEToken.sol";
 import {PCETokenV2} from "../src/PCETokenV2.sol";
 import {PCETokenV3} from "../src/PCETokenV3.sol";
+import {PCETokenV4} from "../src/PCETokenV4.sol";
 import {ExchangeAllowMethod} from "../src/lib/Enum.sol";
 import {Upgrades} from "openzeppelin-foundry-upgrades/Upgrades.sol";
 
 contract PCECommunityTokenV2Test is Test {
-    PCETokenV3 public pceToken;
-    PCECommunityTokenV3 public token;
+    PCETokenV4 public pceToken;
+    PCECommunityTokenV4 public token;
     address public owner;
     address public user1;
     address public user2;
@@ -54,8 +56,12 @@ contract PCECommunityTokenV2Test is Test {
         Upgrades.upgradeBeacon(pceCommunityTokenBeacon, "PCECommunityTokenV3.sol:PCECommunityTokenV3");
         Upgrades.upgradeProxy(pceTokenProxy, "PCETokenV3.sol:PCETokenV3", "");
 
+        // Upgrade to V4
+        Upgrades.upgradeBeacon(pceCommunityTokenBeacon, "PCECommunityTokenV4.sol:PCECommunityTokenV4");
+        Upgrades.upgradeProxy(pceTokenProxy, "PCETokenV4.sol:PCETokenV4", "");
+
         // Cast as PCEToken
-        pceToken = PCETokenV3(pceTokenProxy);
+        pceToken = PCETokenV4(pceTokenProxy);
 
         // Create token
         address[] memory incomeTargetTokens = new address[](0);
@@ -98,7 +104,7 @@ contract PCECommunityTokenV2Test is Test {
         address[] memory tokens = pceToken.getTokens();
         if (tokens.length == 0) revert NoTokensCreated();
         address tokenAddress = tokens[0];
-        token = PCECommunityTokenV3(tokenAddress);
+        token = PCECommunityTokenV4(tokenAddress);
         console2.log("Community token address:", tokenAddress);
     }
 
