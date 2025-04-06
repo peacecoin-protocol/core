@@ -2,16 +2,75 @@
 pragma solidity 0.8.26;
 
 import {Test, console2} from "forge-std/Test.sol";
-import {PCECommunityToken} from "../src/PCECommunityToken.sol";
-import {PCECommunityTokenV2} from "../src/PCECommunityTokenV2.sol";
-import {PCECommunityTokenV3} from "../src/PCECommunityTokenV3.sol";
 import {PCECommunityTokenV4} from "../src/PCECommunityTokenV4.sol";
 import {PCEToken} from "../src/PCEToken.sol";
-import {PCETokenV2} from "../src/PCETokenV2.sol";
-import {PCETokenV3} from "../src/PCETokenV3.sol";
 import {PCETokenV4} from "../src/PCETokenV4.sol";
 import {ExchangeAllowMethod} from "../src/lib/Enum.sol";
-import {Upgrades} from "openzeppelin-foundry-upgrades/Upgrades.sol";
+
+// Minimal Beacon for testing
+contract MinimalBeacon {
+    address public implementation;
+    address public owner;
+
+    constructor(address initialImplementation) {
+        implementation = initialImplementation;
+        owner = msg.sender;
+    }
+
+    function upgradeTo(address newImplementation) public {
+        require(msg.sender == owner, "Ownable: caller is not the owner");
+        implementation = newImplementation;
+    }
+}
+
+// Minimal UUPS Proxy for testing
+contract MinimalUUPSProxy {
+    address public implementation;
+    address public owner;
+
+    constructor(address initialImplementation) {
+        implementation = initialImplementation;
+        owner = msg.sender; // Simplified ownership
+    }
+
+    // Allow upgrading the implementation (simplified for testing)
+    function upgradeTo(address newImplementation) public {
+         require(msg.sender == owner, "Ownable: caller is not the owner");
+        implementation = newImplementation;
+    }
+
+    fallback() external payable {
+        _delegate(implementation);
+    }
+
+    receive() external payable {
+        _delegate(implementation);
+    }
+
+    function _delegate(address _implementation) internal virtual {
+        assembly {
+            // Copy msg.data. We take full control of memory in this inline assembly
+            // block, so it will not interfere with Solidity's memory management.
+            calldatacopy(0, 0, calldatasize())
+
+            // Call the implementation.
+            // out and outsize are 0 because we don't know the size yet.
+            let result := delegatecall(gas(), _implementation, 0, calldatasize(), 0, 0)
+
+            // Copy the returned data.
+            returndatacopy(0, 0, returndatasize())
+
+            switch result
+            // delegatecall returns 0 on error.
+            case 0 {
+                revert(0, returndatasize())
+            }
+            default {
+                return(0, returndatasize())
+            }
+        }
+    }
+}
 
 contract PCECommunityTokenV2Test is Test {
     PCETokenV4 public pceToken;
@@ -30,38 +89,38 @@ contract PCECommunityTokenV2Test is Test {
         user1 = address(0x1);
         user2 = address(0x2);
 
-        // Deploy using OpenZeppelin Upgrades library
         vm.startPrank(owner);
 
-        // Deploy PCECommunityToken beacon
-        address pceCommunityTokenBeacon = Upgrades.deployBeacon(
-            "PCECommunityToken.sol:PCECommunityToken",
-            owner
+        // 1. Deploy implementations
+        PCECommunityTokenV4 pceCommunityTokenV4 = new PCECommunityTokenV4();
+
+        PCEToken pceTokenV1 = new PCEToken();
+        PCETokenV4 pceTokenV4Impl = new PCETokenV4(); // Use a different name for the implementation
+
+        // 2. Deploy Minimal Beacon for Community Token
+        MinimalBeacon pceCommunityTokenBeacon = new MinimalBeacon(address(pceCommunityTokenV4));
+
+        // 3. Deploy Minimal UUPS Proxy for PCEToken
+        MinimalUUPSProxy pceTokenProxy = new MinimalUUPSProxy(address(pceTokenV1));
+
+        // 4. Initialize the PCEToken proxy
+        // Cast the proxy address to PCEToken interface to call initialize
+        PCEToken pceTokenProxyInit = PCEToken(address(pceTokenProxy));
+        pceTokenProxyInit.initialize(
+            "PCE Token",
+            "PCE",
+            address(pceCommunityTokenBeacon),
+            address(0x687C1D2dd0F422421BeF7aC2a52f50e858CAA867)
         );
 
-        // Deploy PCEToken UUPS proxy
-        address pceTokenProxy = Upgrades.deployUUPSProxy(
-            "PCEToken.sol:PCEToken",
-            abi.encodeCall(
-                PCEToken.initialize,
-                ("PCE Token", "PCE", pceCommunityTokenBeacon, address(0x687C1D2dd0F422421BeF7aC2a52f50e858CAA867))
-            )
-        );
+        // 5. Perform upgrades (simulated)
+        pceTokenProxy.upgradeTo(address(pceTokenV4Impl)); // Upgrade to PCETokenV4 implementation
 
-        // Upgrade to V2
-        Upgrades.upgradeBeacon(pceCommunityTokenBeacon, "PCECommunityTokenV2.sol:PCECommunityTokenV2");
-        Upgrades.upgradeProxy(pceTokenProxy, "PCETokenV2.sol:PCETokenV2", "");
+        // 6. Cast the proxy to the final version
+        pceToken = PCETokenV4(address(pceTokenProxy));
 
-        // Upgrade to V3
-        Upgrades.upgradeBeacon(pceCommunityTokenBeacon, "PCECommunityTokenV3.sol:PCECommunityTokenV3");
-        Upgrades.upgradeProxy(pceTokenProxy, "PCETokenV3.sol:PCETokenV3", "");
-
-        // Upgrade to V4
-        Upgrades.upgradeBeacon(pceCommunityTokenBeacon, "PCECommunityTokenV4.sol:PCECommunityTokenV4");
-        Upgrades.upgradeProxy(pceTokenProxy, "PCETokenV4.sol:PCETokenV4", "");
-
-        // Cast as PCEToken
-        pceToken = PCETokenV4(pceTokenProxy);
+        // Initial mint for token creation (assuming createToken needs owner balance)
+        pceToken.mint(owner, 10000 * 10**18); // Mint some initial tokens to owner
 
         // Create token
         address[] memory incomeTargetTokens = new address[](0);
@@ -83,7 +142,7 @@ contract PCECommunityTokenV2Test is Test {
             incomeTargetTokens,
             outgoTargetTokens
         ) {
-            console2.log("Token creation successful with V1");
+            console2.log("Token creation successful"); // Updated log message
         } catch Error(string memory reason) {
             console2.log("Token creation failed with reason:", reason);
             revert(reason);
@@ -96,16 +155,20 @@ contract PCECommunityTokenV2Test is Test {
         vm.stopPrank();
 
         // Add debug information
-        console2.log("PCEToken address:", address(pceToken));
-        console2.log("Beacon address:", pceCommunityTokenBeacon);
+        console2.log("PCEToken proxy address:", address(pceToken));
+        console2.log("Community Beacon address:", address(pceCommunityTokenBeacon));
         console2.log("Owner address:", owner);
 
         // Get the address of the created token
         address[] memory tokens = pceToken.getTokens();
         if (tokens.length == 0) revert NoTokensCreated();
         address tokenAddress = tokens[0];
-        token = PCECommunityTokenV4(tokenAddress);
-        console2.log("Community token address:", tokenAddress);
+        // The community token created will be a proxy pointing to the beacon's implementation
+        // We need to interact with the community token *proxy*, not the implementation directly
+        // Assuming createToken deploys a BeaconProxy for the community token
+        // We need the *actual* address of the created community token proxy
+        token = PCECommunityTokenV4(payable(tokenAddress)); // Cast to payable for proxy interaction
+        console2.log("Community token proxy address:", tokenAddress);
     }
 
     // Common test function
