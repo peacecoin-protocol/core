@@ -14,7 +14,6 @@ import { Utils } from "./lib/Utils.sol";
 import { ExchangeAllowMethod } from "./lib/Enum.sol";
 import { NativeMetaTransaction } from "./lib/polygon/NativeMetaTransaction.sol";
 import { Math } from "@openzeppelin/contracts/utils/math/Math.sol";
-
 /// @custom:oz-upgrades-from PCEToken
 
 contract PCETokenV4 is
@@ -196,6 +195,37 @@ contract PCETokenV4 is
 
         return (((localTokens[toToken].exchangeRate << 96) / INITIAL_FACTOR) * target.getCurrentFactor())
             / lastModifiedFactor;
+    }
+
+    /**
+     * @notice Calculate the exchange rate between two community tokens
+     * @param fromToken The source community token address
+     * @param toToken The target community token address
+     * @return The exchange rate (without shift)
+     *
+     * Amount of toToken received when swapping 1 fromToken = 1 × exchangeRate
+     */
+    function getSwapRateBetweenTokens(address fromToken, address toToken) public view returns (uint256) {
+        require(localTokens[fromToken].isExists, "From token not found");
+        require(localTokens[toToken].isExists, "Target token not found");
+
+        PCECommunityTokenV4 fromTarget = PCECommunityTokenV4(fromToken);
+        PCECommunityTokenV4 toTarget = PCECommunityTokenV4(toToken);
+
+        uint256 exchangeRateRatio = Math.mulDiv(
+            localTokens[toToken].exchangeRate,
+            INITIAL_FACTOR,
+            localTokens[fromToken].exchangeRate
+        );
+
+        uint256 currentFactorRatio = Math.mulDiv(
+            toTarget.getCurrentFactor(),
+            INITIAL_FACTOR,
+            fromTarget.getCurrentFactor()
+        );
+
+        uint256 result = Math.mulDiv(exchangeRateRatio, currentFactorRatio, INITIAL_FACTOR);
+        return result;
     }
 
     function swapToLocalToken(address toToken, uint256 amountToSwap) public {

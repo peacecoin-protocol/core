@@ -6,6 +6,8 @@ import {PCECommunityTokenV4} from "../src/PCECommunityTokenV4.sol";
 import {PCEToken} from "../src/PCEToken.sol";
 import {PCETokenV4} from "../src/PCETokenV4.sol";
 import {ExchangeAllowMethod} from "../src/lib/Enum.sol";
+import { Math } from "@openzeppelin/contracts/utils/math/Math.sol";
+import { Utils } from "../src/lib/Utils.sol";
 
 // Minimal Beacon for testing
 contract MinimalBeacon {
@@ -72,19 +74,20 @@ contract MinimalUUPSProxy {
     }
 }
 
-contract PCECommunityTokenV2Test is Test {
+contract PCETest is Test {
     PCETokenV4 public pceToken;
     PCECommunityTokenV4 public token;
     address public owner;
     address public user1;
     address public user2;
-    uint256 public initialSupply = 10 ** 18;
+    uint256 public initialSupply = 1 ether;
 
     // Custom error definitions
     error NoTokensCreated();
     error TokenCreationFailed();
 
     function setUp() public {
+        console2.log("========= setUp START ==========");
         owner = address(this);
         user1 = address(0x1);
         user2 = address(0x2);
@@ -120,7 +123,7 @@ contract PCECommunityTokenV2Test is Test {
         pceToken = PCETokenV4(address(pceTokenProxy));
 
         // Initial mint for token creation (assuming createToken needs owner balance)
-        pceToken.mint(owner, 10000 * 10**18); // Mint some initial tokens to owner
+        pceToken.mint(owner, 10000 ether); // Mint some initial tokens to owner
 
         // Create token
         address[] memory incomeTargetTokens = new address[](0);
@@ -129,8 +132,8 @@ contract PCECommunityTokenV2Test is Test {
         try pceToken.createToken(
             "PCE Community Token",
             "PCECT",
-            1000 * 10**18, // Amount of PCEToken to exchange
-            10**18, // Dilution factor (1:1)
+            1000 ether, // Amount of PCEToken to exchange
+            1 ether, // Dilution factor (1:1)
             1, // Decrease interval (days)
             9800, // After decrease BP (98%)
             1000, // Max increase of total supply BP (10%)
@@ -272,15 +275,103 @@ contract PCECommunityTokenV2Test is Test {
 
     // Test that small value transfers work correctly
     function testSmallValueTransfer() public {
-        uint256 smallMintAmount = 100 * 10**18;  // 100 tokens
-        uint256 smallTransferAmount = 10 * 10**18;  // 10 tokens
+        uint256 smallMintAmount = 100 ether;  // 100 tokens
+        uint256 smallTransferAmount = 10 ether;  // 10 tokens
         _testTransfer("small", smallMintAmount, smallTransferAmount);
     }
 
     // Test that medium value transfers work correctly
     function testLargeValueTransfer() public {
-        uint256 largeMintAmount = 10000000 * 10**18;  // 10000000 tokens
-        uint256 largeTransferAmount = 100000 * 10**18;  // 100000 tokens
+        uint256 largeMintAmount = 10000000 ether;  // 10000000 tokens
+        uint256 largeTransferAmount = 100000 ether;  // 100000 tokens
         _testTransfer("large", largeMintAmount, largeTransferAmount);
+    }
+
+    // Test swapTokens and getSwapRateBetweenTokens equivalence
+    function testgetSwapRateBetweenTokens() public {
+        console2.log("========= testgetSwapRateBetweenTokens START ==========");
+        vm.startPrank(owner);
+        address[] memory incomeTargetTokens = new address[](0);
+        address[] memory outgoTargetTokens = new address[](0);
+
+        // Create first token with 1:1 exchange rate
+        pceToken.createToken(
+            "First Community Token",
+            "FCT",
+            1000 ether, // Amount of PCEToken to exchange
+            1 ether, // Dilution factor (1:1)
+            1, // Decrease interval (days)
+            9800, // After decrease BP (98%)
+            1000, // Max increase of total supply BP (10%)
+            500, // Max increase BP (5%)
+            1000, // Max usage BP (10%)
+            100, // Change BP (1%)
+            ExchangeAllowMethod.All, // Income exchange allow method
+            ExchangeAllowMethod.All, // Outgo exchange allow method
+            incomeTargetTokens,
+            outgoTargetTokens
+        );
+
+        // Create second token with 2:1 exchange rate
+        pceToken.createToken(
+            "Second Community Token",
+            "SCT",
+            1000 ether, // Amount of PCEToken to exchange
+            2 ether, // Dilution factor (2:1)
+            2, // Decrease interval (days)
+            9900, // After decrease BP (99%)
+            2000, // Max increase of total supply BP (20%)
+            1000, // Max increase BP (10%)
+            2000, // Max usage BP (20%)
+            200, // Change BP (2%)
+            ExchangeAllowMethod.All, // Income exchange allow method
+            ExchangeAllowMethod.All, // Outgo exchange allow method
+            incomeTargetTokens,
+            outgoTargetTokens
+        );
+
+        // Get all token addresses
+        address[] memory tokens = pceToken.getTokens();
+        address firstTokenAddress = tokens[1];
+        address secondTokenAddress = tokens[2];
+        PCECommunityTokenV4 firstToken = PCECommunityTokenV4(firstTokenAddress);
+        PCECommunityTokenV4 secondToken = PCECommunityTokenV4(secondTokenAddress);
+
+        // Mint tokens to user1 for testing
+        firstToken.mint(user1, 1000 ether);
+        secondToken.mint(user1, 1000 ether);
+        vm.stopPrank();
+
+        // check getSwapRateBetweenTokens
+        uint256 rate1to1 = pceToken.getSwapRateBetweenTokens(firstTokenAddress, firstTokenAddress);
+        assertEq(rate1to1, 1 ether);
+
+        uint256 rate1to2 = pceToken.getSwapRateBetweenTokens(firstTokenAddress, secondTokenAddress);
+        assertEq(rate1to2, 2 ether);
+
+        uint256 rate2to1 = pceToken.getSwapRateBetweenTokens(secondTokenAddress, firstTokenAddress);
+        assertEq(rate2to1, 0.5 ether);
+
+        // check swapTokens
+        assertEq(firstToken.balanceOf(user1), 1000 ether);
+        assertEq(secondToken.balanceOf(user1), 1000 ether);
+
+        vm.startPrank(user1);
+
+        // swap 100 tokens from firstToken to secondToken
+        // firstToken minus 100 tokens, secondToken plus 200 tokens
+        firstToken.swapTokens(secondTokenAddress, 100 ether);
+
+        assertEq(firstToken.balanceOf(user1), 900 ether);
+        assertEq(secondToken.balanceOf(user1), 1200 ether);
+
+        // swap 100 tokens from secondToken to firstToken
+        // firstToken plus 50 tokens, secondToken minus 100 tokens
+        secondToken.swapTokens(firstTokenAddress, 100 ether);
+
+        assertEq(firstToken.balanceOf(user1), 950 ether);
+        assertEq(secondToken.balanceOf(user1), 1100 ether);
+
+        vm.stopPrank();
     }
 }
