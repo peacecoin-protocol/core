@@ -1,0 +1,54 @@
+// SPDX-License-Identifier: MIT
+pragma solidity ^0.6.0;
+
+import "@openzeppelin/contracts/utils/EnumerableSet.sol";
+import "@openzeppelin/contracts/utils/Address.sol";
+import "@openzeppelin/contracts/GSN/Context.sol";
+import "@openzeppelin/contracts/access/AccessControl.sol";
+import "@openzeppelin/contracts/token/ERC20/IERC20.sol";
+import "@openzeppelin/contracts/math/SafeMath.sol";
+import "@openzeppelin/contracts/token/ERC20/ERC20.sol";
+import "@openzeppelin/contracts/token/ERC20/ERC20Burnable.sol";
+
+/**
+ * @title PeaceCoinToken
+ * @dev This is the original Peace Coin Token contract deployed on Ethereum mainnet
+ * at address: 0x7c28310CC0b8d898c57b93913098e74a3ba23228
+ *
+ * This contract was deployed with Solidity version 0.6.0 and represents the
+ * initial implementation of the Peace Coin Token with role-based minting capabilities.
+ *
+ * The contract embodies the philosophy of sharing and global connection, with the
+ * vision that "If everyone in the world share equally, all people will be rich
+ * more than they can use. Pass the ARIGATO all over the world."
+ */
+contract PeaceCoinToken is Context, AccessControl, ERC20Burnable {
+    bytes32 public constant MINTER_ROLE = keccak256("MINTER_ROLE");
+
+    /**
+     * @dev If everyone in the world share equally, all people will be rich more than they can use.
+     * Pass the "ARIGATO" all over the world.
+     */
+    constructor(string memory name, string memory symbol) public ERC20(name, symbol) {
+        _setupRole(DEFAULT_ADMIN_ROLE, _msgSender());
+        _setupRole(MINTER_ROLE, _msgSender());
+    }
+
+    /**
+     * @dev Creates `amount` new tokens for `to`.
+     *
+     * See {ERC20-_mint}.
+     *
+     * Requirements:
+     *
+     * - the caller must have the `MINTER_ROLE`.
+     */
+    function mint(address to, uint256 amount) public {
+        require(hasRole(MINTER_ROLE, _msgSender()), "ERC20Minter: must have minter role to mint");
+        _mint(to, amount);
+    }
+
+    function _beforeTokenTransfer(address from, address to, uint256 amount) internal override(ERC20) {
+        super._beforeTokenTransfer(from, to, amount);
+    }
+}
