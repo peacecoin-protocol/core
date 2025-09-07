@@ -4,31 +4,32 @@ pragma solidity 0.8.26;
 import "@openzeppelin/contracts-upgradeable/governance/GovernorUpgradeable.sol";
 import "@openzeppelin/contracts-upgradeable/governance/extensions/GovernorCountingSimpleUpgradeable.sol";
 import "@openzeppelin/contracts-upgradeable/governance/extensions/GovernorVotesUpgradeable.sol";
-import "@openzeppelin/contracts-upgradeable/governance/extensions/GovernorVotesQuorumFractionUpgradeable.sol";
 import "@openzeppelin/contracts-upgradeable/governance/extensions/GovernorTimelockControlUpgradeable.sol";
 import "@openzeppelin/contracts-upgradeable/proxy/utils/UUPSUpgradeable.sol";
+import "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 
 /**
  * @title PCEGovernor
  * @dev Governor contract for PCE token holders to create and vote on proposals
- * 
+ *
  * This contract enables:
  * - Creating proposals for protocol changes
  * - Voting with PCE tokens
  * - Executing approved proposals after timelock
  * - Compatible with Tally interface
  */
-contract PCEGovernor is 
+contract PCEGovernor is
     GovernorUpgradeable,
     GovernorCountingSimpleUpgradeable,
     GovernorVotesUpgradeable,
-    GovernorVotesQuorumFractionUpgradeable,
     GovernorTimelockControlUpgradeable,
     UUPSUpgradeable
 {
     uint256 private _votingDelay;
     uint256 private _votingPeriod;
     uint256 private _proposalThreshold;
+    IERC20 private _quorumSupplyToken;
+    uint256 private _absoluteQuorum;
     /// @custom:oz-upgrades-unsafe-allow constructor
     constructor() {
         _disableInitializers();
@@ -41,18 +42,22 @@ contract PCEGovernor is
         uint256 _vDelay,
         uint256 _vPeriod,
         uint256 _pThreshold,
-        uint256 _quorumPercentage
+        address _quorumToken,
+        uint256 _absoluteQuorumValue
     ) public initializer {
         __Governor_init(_name);
         __GovernorCountingSimple_init();
         __GovernorVotes_init(IVotes(_token));
-        __GovernorVotesQuorumFraction_init(_quorumPercentage); // 4% quorum
         __GovernorTimelockControl_init(TimelockControllerUpgradeable(payable(_timelock)));
         __UUPSUpgradeable_init();
-        
+
         _votingDelay = _vDelay;
         _votingPeriod = _vPeriod;
         _proposalThreshold = _pThreshold;
+        require(_quorumToken != address(0), "Invalid quorum token");
+        _quorumSupplyToken = IERC20(_quorumToken);
+        require(_absoluteQuorumValue > 0, "Invalid absolute quorum");
+        _absoluteQuorum = _absoluteQuorumValue;
     }
 
     // Required overrides
@@ -75,13 +80,18 @@ contract PCEGovernor is
         return _votingPeriod;
     }
 
-    function quorum(uint256 blockNumber)
+    function quorum(uint256)
         public
         view
-        override(GovernorUpgradeable, GovernorVotesQuorumFractionUpgradeable)
+        override(GovernorUpgradeable)
         returns (uint256)
     {
-        return super.quorum(blockNumber);
+        // Absolute quorum in token units (18 decimals). Ignores percentage-based calculation.
+        return _absoluteQuorum;
+    }
+
+    function absoluteQuorum() public view returns (uint256) {
+        return _absoluteQuorum;
     }
 
     function state(uint256 proposalId)

@@ -12,7 +12,8 @@ import { ERC1967Proxy } from "@openzeppelin/contracts/proxy/ERC1967/ERC1967Proxy
  * @notice Deployment script for PCE Governor and Timelock
  *
  * Required environment variables:
- * - WPCE_TOKEN_ADDRESS: Address of the WPCE token
+ * - WPCE_TOKEN_ADDRESS: Address of the WPCE token (used for voting)
+ * - PCE_TOKEN_ADDRESS: Address of the PCE token (used for quorum supply)
  * - PRIVATE_KEY: Private key of the deployer
  *
  * Usage:
@@ -20,11 +21,11 @@ import { ERC1967Proxy } from "@openzeppelin/contracts/proxy/ERC1967/ERC1967Proxy
  */
 contract DeployGovernance is Script {
     // Governance parameters
-    uint256 constant TIMELOCK_DELAY = 2 days;        // 2 days in seconds for timelock
-    uint256 constant VOTING_DELAY = 1;            // ~1 block (12s per block)
-    uint256 constant VOTING_PERIOD = 7200 * 7;          // ~7 days in blocks (12s per block)
-    uint256 constant PROPOSAL_THRESHOLD = 1000e18;   // 1000 WPCE to create proposal
-    uint256 constant QUORUM_PERCENTAGE = 4;          // 4% of total supply
+    uint256 public constant TIMELOCK_DELAY = 2 days;        // 2 days in seconds for timelock
+    uint256 public constant VOTING_DELAY = 7200;            // ~24 hours in blocks (12s per block)
+    uint256 public constant VOTING_PERIOD = 7200 * 3;       // ~3 days in blocks (12s per block)
+    uint256 public constant PROPOSAL_THRESHOLD = 1000e18;   // 1000 WPCE to create proposal
+    uint256 public constant QUORUM_ABSOLUTE = 500000 ether; // Absolute quorum target in token units
 
     function run() external returns (
         address governor,
@@ -32,6 +33,7 @@ contract DeployGovernance is Script {
         address timelock
     ) {
         address wpceToken = vm.envAddress("WPCE_TOKEN_ADDRESS");
+        address pceToken = vm.envAddress("PCE_TOKEN_ADDRESS");
         uint256 deployerPrivateKey = vm.envUint("PRIVATE_KEY");
         address deployer = vm.addr(deployerPrivateKey);
 
@@ -64,7 +66,8 @@ contract DeployGovernance is Script {
             VOTING_DELAY,
             VOTING_PERIOD,
             PROPOSAL_THRESHOLD,
-            QUORUM_PERCENTAGE
+            pceToken,
+            QUORUM_ABSOLUTE
         );
 
         governor = address(new ERC1967Proxy(governorImplementation, initData));
@@ -96,7 +99,7 @@ contract DeployGovernance is Script {
         console.log("  Voting Delay:", governorContract.votingDelay(), "blocks");
         console.log("  Voting Period:", governorContract.votingPeriod(), "blocks");
         console.log("  Proposal Threshold:", governorContract.proposalThreshold(), "wei");
-        console.log("  Quorum:", governorContract.quorumNumerator(), "%");
+        console.log("  Absolute Quorum:", governorContract.absoluteQuorum(), "wei");
 
         console.log("\n  IMPORTANT NEXT STEPS:");
         console.log("Note: Governor upgrades are already controlled by Timelock (UUPS pattern)");
