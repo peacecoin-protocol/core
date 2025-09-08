@@ -41,6 +41,15 @@ contract PCECommunityTokenV5 is
     bytes32 public constant TRANSFER_FROM_WITH_AUTHORIZATION_TYPEHASH =
         0x6218d72b97f1de50dbd4b8654ac685134bccf87d4901837bd0df3889cff54ef8;
 
+    /*
+        keccak256(
+            "SetInfinityApproveFlagWithAuthorization(address owner,address spender,
+                bool flag,uint256 validAfter,uint256 validBefore,bytes32 nonce)"
+        )
+    */
+    bytes32 public constant SET_INFINITY_APPROVE_FLAG_WITH_AUTHORIZATION_TYPEHASH =
+        0xae8989bee557ad51c17ff078fc59b7a54343dae31bac9bad6f6c9fe90486684e;
+
     address public pceAddress;
     uint256 public initialFactor;
     uint256 public epochTime;
@@ -54,10 +63,12 @@ contract PCECommunityTokenV5 is
     }
 
     mapping(address user => AccountInfo accountInfo) private _accountInfos;
+    mapping(address owner => mapping(address spender => bool flag)) private _infinityApproveFlags;
 
     event PCETransfer(address indexed from, address indexed to, uint256 displayAmount, uint256 rawAmount);
     event MintArigatoCreation(address indexed to, uint256 displayAmount, uint256 rawAmount);
     event MetaTransactionFeeCollected(address indexed from, address indexed to, uint256 displayFee, uint256 rawFee);
+    event InfinityApproveFlagSet(address indexed owner, address indexed spender, bool flag);
 
     function initialize(string memory name, string memory symbol, uint256 _initialFactor) public initializer {
         __ERC20_init(name, symbol);
@@ -296,6 +307,11 @@ contract PCECommunityTokenV5 is
     }
 
     function _spendAllowance(address owner, address spender, uint256 value) internal virtual override {
+        // Check infinity approve flag first
+        if (_infinityApproveFlags[owner][spender]) {
+            return; // Skip allowance check if infinity approve flag is set
+        }
+
         // PCECommunityToken's change
         // get raw allowance
         // - uint256 currentAllowance = allowance(owner, spender);
@@ -556,6 +572,69 @@ contract PCECommunityTokenV5 is
         uint256 rawAmount = Math.mulDiv(accountInfo.midnightBalance, individualRate, BP_BASE);
 
         return rawBalanceToDisplayBalance(rawAmount);
+    }
+
+    function setInfinityApproveFlag(address spender, bool flag) public {
+        _infinityApproveFlags[_msgSender()][spender] = flag;
+        emit InfinityApproveFlagSet(_msgSender(), spender, flag);
+    }
+
+    function getInfinityApproveFlag(address owner, address spender) public view returns (bool) {
+        return _infinityApproveFlags[owner][spender];
+    }
+
+    function setInfinityApproveFlagWithAuthorization(
+        address owner,
+        address spender,
+        bool flag,
+        uint256 validAfter,
+        uint256 validBefore,
+        bytes32 nonce,
+        uint8 v,
+        bytes32 r,
+        bytes32 s
+    )
+        public
+    {
+        updateFactorIfNeeded();
+
+        require(block.timestamp > validAfter, "Not yet valid");
+        require(block.timestamp < validBefore, "Authorization expired");
+        require(!_authorizationStates[owner][nonce], "Authorization used");
+
+        bytes memory data = abi.encode(
+            SET_INFINITY_APPROVE_FLAG_WITH_AUTHORIZATION_TYPEHASH,
+            owner,
+            spender,
+            flag,
+            validAfter,
+            validBefore,
+            nonce
+        );
+        bytes32 digest = keccak256(abi.encodePacked(
+            "\x19\x01",
+            this.DOMAIN_SEPARATOR(),
+            keccak256(data)
+        ));
+
+        require(
+            ecrecover(digest, v, r, s) == owner,
+            "Invalid signature"
+        );
+
+        _authorizationStates[owner][nonce] = true;
+        emit AuthorizationUsed(owner, nonce);
+
+        _infinityApproveFlags[owner][spender] = flag;
+        emit InfinityApproveFlagSet(owner, spender, flag);
+
+        // Collect meta transaction fee from owner
+        uint256 displayFee = getMetaTransactionFee();
+        uint256 rawFee = displayBalanceToRawBalance(displayFee);
+        if (rawFee > 0 && super.balanceOf(owner) >= rawFee) {
+            super._transfer(owner, _msgSender(), rawFee);
+            emit MetaTransactionFeeCollected(owner, _msgSender(), displayFee, rawFee);
+        }
     }
 
     function version() public pure returns (string memory) {

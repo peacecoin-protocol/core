@@ -474,4 +474,113 @@ contract PCETest is Test {
         assertTrue(tokenV5.authorizationState(tokenOwner, nonce), "Nonce should be marked as used");
 
     }
+
+    function testInfinityApproveFlag() public {
+        console2.log("========= testInfinityApproveFlag START ==========");
+
+        uint256 privateKeyOwner = 0x1234567890123456789012345678901234567890123456789012345678901234;
+        address tokenOwner = vm.addr(privateKeyOwner);
+        address spender = address(0x4);
+        address to = address(0x5);
+
+        // Get the existing V5 token from setUp
+        address[] memory tokens = pceToken.getTokens();
+        PCECommunityTokenV5 tokenV5 = PCECommunityTokenV5(tokens[tokens.length - 1]);
+
+        // Mint tokens to tokenOwner
+        tokenV5.mint(tokenOwner, 1000 ether);
+
+        // Test 1: Normal transferFrom without infinity approve flag (should fail)
+        uint256 amount = 100 ether;
+        vm.prank(spender);
+        vm.expectRevert();
+        tokenV5.transferFrom(tokenOwner, to, amount);
+
+        // Test 2: Set infinity approve flag
+        vm.prank(tokenOwner);
+        tokenV5.setInfinityApproveFlag(spender, true);
+
+        // Verify flag is set
+        assertTrue(tokenV5.getInfinityApproveFlag(tokenOwner, spender), "Infinity approve flag should be set");
+
+        // Test 3: transferFrom with infinity approve flag (should succeed)
+        uint256 initialOwnerBalance = tokenV5.balanceOf(tokenOwner);
+        uint256 initialToBalance = tokenV5.balanceOf(to);
+
+        vm.prank(spender);
+        bool success = tokenV5.transferFrom(tokenOwner, to, amount);
+
+        assertTrue(success, "Transfer should succeed with infinity approve flag");
+        assertTrue(tokenV5.balanceOf(tokenOwner) != initialOwnerBalance, "Owner balance should change");
+        assertEq(tokenV5.balanceOf(to), initialToBalance + amount, "To balance should increase");
+
+        // Test 4: Disable infinity approve flag
+        vm.prank(tokenOwner);
+        tokenV5.setInfinityApproveFlag(spender, false);
+
+        // Verify flag is unset
+        assertFalse(tokenV5.getInfinityApproveFlag(tokenOwner, spender), "Infinity approve flag should be unset");
+
+        // Test 5: transferFrom without infinity approve flag (should fail again)
+        vm.prank(spender);
+        vm.expectRevert();
+        tokenV5.transferFrom(tokenOwner, to, amount);
+    }
+
+    function testSetInfinityApproveFlagWithAuthorization() public {
+        console2.log("========= testSetInfinityApproveFlagWithAuthorization START ==========");
+
+        uint256 privateKeyOwner = 0x1234567890123456789012345678901234567890123456789012345678901234;
+        address tokenOwner = vm.addr(privateKeyOwner);
+        address spender = address(0x4);
+
+        // Get existing V5 token from setUp
+        address[] memory tokens = pceToken.getTokens();
+        PCECommunityTokenV5 tokenV5 = PCECommunityTokenV5(tokens[tokens.length - 1]);
+
+        // Mint tokens to tokenOwner for fee payment
+        tokenV5.mint(tokenOwner, 1000 ether);
+
+        // Prepare signature for setInfinityApproveFlagWithAuthorization
+        bool flag = true;
+        uint256 validAfter = block.timestamp - 1;
+        uint256 validBefore = block.timestamp + 1 hours;
+        bytes32 nonce = keccak256("test_nonce_infinity_approve");
+
+        bytes32 structHash = keccak256(abi.encode(
+            tokenV5.SET_INFINITY_APPROVE_FLAG_WITH_AUTHORIZATION_TYPEHASH(),
+            tokenOwner,
+            spender,
+            flag,
+            validAfter,
+            validBefore,
+            nonce
+        ));
+
+        bytes32 digest = keccak256(abi.encodePacked(
+            "\x19\x01",
+            tokenV5.DOMAIN_SEPARATOR(),
+            structHash
+        ));
+
+        (uint8 v, bytes32 r, bytes32 s) = vm.sign(privateKeyOwner, digest);
+
+        // Execute setInfinityApproveFlagWithAuthorization
+        vm.prank(user1); // Meta transaction executor
+        tokenV5.setInfinityApproveFlagWithAuthorization(
+            tokenOwner,
+            spender,
+            flag,
+            validAfter,
+            validBefore,
+            nonce,
+            v,
+            r,
+            s
+        );
+
+        // Verify flag is set
+        assertTrue(tokenV5.getInfinityApproveFlag(tokenOwner, spender), "Infinity approve flag should be set");
+        assertTrue(tokenV5.authorizationState(tokenOwner, nonce), "Nonce should be marked as used");
+    }
 }
