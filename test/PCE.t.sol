@@ -2,9 +2,9 @@
 pragma solidity 0.8.26;
 
 import {Test, console2} from "forge-std/Test.sol";
-import {PCECommunityTokenV4} from "../src/PCECommunityTokenV4.sol";
+import {PCECommunityTokenV5} from "../src/PCECommunityTokenV5.sol";
 import {PCEToken} from "../src/PCEToken.sol";
-import {PCETokenV4} from "../src/PCETokenV4.sol";
+import {PCETokenV5} from "../src/PCETokenV5.sol";
 import {ExchangeAllowMethod} from "../src/lib/Enum.sol";
 import { Math } from "@openzeppelin/contracts/utils/math/Math.sol";
 import { Utils } from "../src/lib/Utils.sol";
@@ -75,8 +75,9 @@ contract MinimalUUPSProxy {
 }
 
 contract PCETest is Test {
-    PCETokenV4 public pceToken;
-    PCECommunityTokenV4 public token;
+    PCETokenV5 public pceToken;
+    PCECommunityTokenV5 public token;
+    MinimalBeacon public pceCommunityTokenBeacon;
     address public owner;
     address public user1;
     address public user2;
@@ -95,13 +96,13 @@ contract PCETest is Test {
         vm.startPrank(owner);
 
         // 1. Deploy implementations
-        PCECommunityTokenV4 pceCommunityTokenV4 = new PCECommunityTokenV4();
+        PCECommunityTokenV5 pceCommunityTokenV5 = new PCECommunityTokenV5();
 
         PCEToken pceTokenV1 = new PCEToken();
-        PCETokenV4 pceTokenV4Impl = new PCETokenV4(); // Use a different name for the implementation
+        PCETokenV5 pceTokenV5Impl = new PCETokenV5(); // Use a different name for the implementation
 
         // 2. Deploy Minimal Beacon for Community Token
-        MinimalBeacon pceCommunityTokenBeacon = new MinimalBeacon(address(pceCommunityTokenV4));
+        pceCommunityTokenBeacon = new MinimalBeacon(address(pceCommunityTokenV5));
 
         // 3. Deploy Minimal UUPS Proxy for PCEToken
         MinimalUUPSProxy pceTokenProxy = new MinimalUUPSProxy(address(pceTokenV1));
@@ -117,10 +118,10 @@ contract PCETest is Test {
         );
 
         // 5. Perform upgrades (simulated)
-        pceTokenProxy.upgradeTo(address(pceTokenV4Impl)); // Upgrade to PCETokenV4 implementation
+        pceTokenProxy.upgradeTo(address(pceTokenV5Impl)); // Upgrade to PCETokenV5 implementation
 
         // 6. Cast the proxy to the final version
-        pceToken = PCETokenV4(address(pceTokenProxy));
+        pceToken = PCETokenV5(address(pceTokenProxy));
 
         // Initial mint for token creation (assuming createToken needs owner balance)
         pceToken.mint(owner, 10000 ether); // Mint some initial tokens to owner
@@ -170,7 +171,7 @@ contract PCETest is Test {
         // We need to interact with the community token *proxy*, not the implementation directly
         // Assuming createToken deploys a BeaconProxy for the community token
         // We need the *actual* address of the created community token proxy
-        token = PCECommunityTokenV4(payable(tokenAddress)); // Cast to payable for proxy interaction
+        token = PCECommunityTokenV5(payable(tokenAddress)); // Cast to payable for proxy interaction
         console2.log("Community token proxy address:", tokenAddress);
     }
 
@@ -334,8 +335,8 @@ contract PCETest is Test {
         address[] memory tokens = pceToken.getTokens();
         address firstTokenAddress = tokens[1];
         address secondTokenAddress = tokens[2];
-        PCECommunityTokenV4 firstToken = PCECommunityTokenV4(firstTokenAddress);
-        PCECommunityTokenV4 secondToken = PCECommunityTokenV4(secondTokenAddress);
+        PCECommunityTokenV5 firstToken = PCECommunityTokenV5(firstTokenAddress);
+        PCECommunityTokenV5 secondToken = PCECommunityTokenV5(secondTokenAddress);
 
         // Mint tokens to user1 for testing
         firstToken.mint(user1, 1000 ether);
@@ -373,5 +374,104 @@ contract PCETest is Test {
         assertEq(secondToken.balanceOf(user1), 1100 ether);
 
         vm.stopPrank();
+    }
+
+    function testTransferFromWithAuthorization() public {
+        console2.log("========= testTransferFromWithAuthorization START ==========");
+
+        uint256 privateKeyOwner = 0x1234567890123456789012345678901234567890123456789012345678901234;
+        address tokenOwner = vm.addr(privateKeyOwner);
+        address spender = address(0x4);
+        address to = address(0x5);
+
+        // Create PCECommunityTokenV5 using PCETokenV5's createToken method
+
+        address[] memory incomeTokens = new address[](0);
+        address[] memory outgoTokens = new address[](0);
+
+        vm.startPrank(address(this));
+        pceToken.createToken(
+            "PCE Community Token V5",
+            "PCEV5",
+            1000 ether, // Amount of PCEToken to exchange
+            1 ether, // Dilution factor (1:1)
+            1, // Decrease interval (days)
+            9800, // After decrease BP (98%)
+            1000, // Max increase of total supply BP (10%)
+            500, // Max increase BP (5%)
+            1000, // Max usage BP (10%)
+            100, // Change BP (1%)
+            ExchangeAllowMethod.All, // Income exchange allow method
+            ExchangeAllowMethod.All, // Outgo exchange allow method
+            incomeTokens,
+            outgoTokens
+        );
+        vm.stopPrank();
+
+        // Get the created token (it will be the last one in the list)
+        address[] memory tokens = pceToken.getTokens();
+        PCECommunityTokenV5 tokenV5 = PCECommunityTokenV5(tokens[tokens.length - 1]);
+
+        // Mint tokens to tokenOwner and set up allowance
+        tokenV5.mint(tokenOwner, 1000 ether);
+
+        vm.prank(tokenOwner);
+        tokenV5.approve(spender, 100 ether);
+
+        // Prepare signature
+        uint256 amount = 100 ether;
+        uint256 validAfter = block.timestamp - 1; // Make sure it's already valid
+        uint256 validBefore = block.timestamp + 1 hours;
+        bytes32 nonce = keccak256("test_nonce");
+
+        bytes32 structHash = keccak256(abi.encode(
+            tokenV5.TRANSFER_FROM_WITH_AUTHORIZATION_TYPEHASH(),
+            tokenOwner,
+            spender,
+            to,
+            amount,
+            validAfter,
+            validBefore,
+            nonce
+        ));
+
+        bytes32 digest = keccak256(abi.encodePacked(
+            "\x19\x01",
+            tokenV5.DOMAIN_SEPARATOR(),
+            structHash
+        ));
+
+        (uint8 v, bytes32 r, bytes32 s) = vm.sign(privateKeyOwner, digest);
+
+        uint256 initialOwnerBalance = tokenV5.balanceOf(tokenOwner);
+        uint256 initialToBalance = tokenV5.balanceOf(to);
+        uint256 initialAllowance = tokenV5.allowance(tokenOwner, spender);
+
+
+        // Execute transferFromWithAuthorization
+        vm.prank(user1); // Meta transaction executor
+        tokenV5.transferFromWithAuthorization(
+            tokenOwner,
+            spender,
+            to,
+            amount,
+            validAfter,
+            validBefore,
+            nonce,
+            v,
+            r,
+            s
+        );
+
+        uint256 finalOwnerBalance = tokenV5.balanceOf(tokenOwner);
+        uint256 finalToBalance = tokenV5.balanceOf(to);
+        uint256 finalAllowance = tokenV5.allowance(tokenOwner, spender);
+
+        // Verify results (account for meta transaction fees and other adjustments)
+        assertTrue(finalOwnerBalance < initialOwnerBalance, "Owner balance should decrease");
+        assertEq(finalToBalance, initialToBalance + amount, "To balance should increase by amount");
+        assertEq(finalAllowance, initialAllowance - amount, "Allowance should decrease by amount");
+        assertTrue(tokenV5.authorizationState(tokenOwner, nonce), "Nonce should be marked as used");
+
     }
 }
