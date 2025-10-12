@@ -2,9 +2,9 @@
 pragma solidity 0.8.26;
 
 import {Test, console2} from "forge-std/Test.sol";
-import {PCECommunityTokenV7} from "../src/PCECommunityTokenV7.sol";
+import {PCECommunityTokenV8} from "../src/PCECommunityTokenV8.sol";
 import {PCEToken} from "../src/PCEToken.sol";
-import {PCETokenV7} from "../src/PCETokenV7.sol";
+import {PCETokenV8} from "../src/PCETokenV8.sol";
 import {ExchangeAllowMethod} from "../src/lib/Enum.sol";
 import { Math } from "@openzeppelin/contracts/utils/math/Math.sol";
 import { Utils } from "../src/lib/Utils.sol";
@@ -75,8 +75,8 @@ contract MinimalUUPSProxy {
 }
 
 contract PCETest is Test {
-    PCETokenV7 public pceToken;
-    PCECommunityTokenV7 public token;
+    PCETokenV8 public pceToken;
+    PCECommunityTokenV8 public token;
     MinimalBeacon public pceCommunityTokenBeacon;
     address public owner;
     address public user1;
@@ -96,13 +96,13 @@ contract PCETest is Test {
         vm.startPrank(owner);
 
         // 1. Deploy implementations
-        PCECommunityTokenV7 pceCommunityTokenV7 = new PCECommunityTokenV7();
+        PCECommunityTokenV8 pceCommunityTokenV8 = new PCECommunityTokenV8();
 
         PCEToken pceTokenV1 = new PCEToken();
-        PCETokenV7 pceTokenV7Impl = new PCETokenV7(); // Use a different name for the implementation
+        PCETokenV8 pceTokenV8Impl = new PCETokenV8(); // Use a different name for the implementation
 
         // 2. Deploy Minimal Beacon for Community Token
-        pceCommunityTokenBeacon = new MinimalBeacon(address(pceCommunityTokenV7));
+        pceCommunityTokenBeacon = new MinimalBeacon(address(pceCommunityTokenV8));
 
         // 3. Deploy Minimal UUPS Proxy for PCEToken
         MinimalUUPSProxy pceTokenProxy = new MinimalUUPSProxy(address(pceTokenV1));
@@ -118,10 +118,10 @@ contract PCETest is Test {
         );
 
         // 5. Perform upgrades (simulated)
-        pceTokenProxy.upgradeTo(address(pceTokenV7Impl)); // Upgrade to PCETokenV7 implementation
+        pceTokenProxy.upgradeTo(address(pceTokenV8Impl)); // Upgrade to PCETokenV8 implementation
 
         // 6. Cast the proxy to the final version
-        pceToken = PCETokenV7(address(pceTokenProxy));
+        pceToken = PCETokenV8(address(pceTokenProxy));
 
         // Initial mint for token creation (assuming createToken needs owner balance)
         pceToken.mint(owner, 10000 ether); // Mint some initial tokens to owner
@@ -171,7 +171,7 @@ contract PCETest is Test {
         // We need to interact with the community token *proxy*, not the implementation directly
         // Assuming createToken deploys a BeaconProxy for the community token
         // We need the *actual* address of the created community token proxy
-        token = PCECommunityTokenV7(payable(tokenAddress)); // Cast to payable for proxy interaction
+        token = PCECommunityTokenV8(payable(tokenAddress)); // Cast to payable for proxy interaction
         console2.log("Community token proxy address:", tokenAddress);
     }
 
@@ -335,8 +335,8 @@ contract PCETest is Test {
         address[] memory tokens = pceToken.getTokens();
         address firstTokenAddress = tokens[1];
         address secondTokenAddress = tokens[2];
-        PCECommunityTokenV7 firstToken = PCECommunityTokenV7(firstTokenAddress);
-        PCECommunityTokenV7 secondToken = PCECommunityTokenV7(secondTokenAddress);
+        PCECommunityTokenV8 firstToken = PCECommunityTokenV8(firstTokenAddress);
+        PCECommunityTokenV8 secondToken = PCECommunityTokenV8(secondTokenAddress);
 
         // Mint tokens to user1 for testing
         firstToken.mint(user1, 1000 ether);
@@ -385,15 +385,15 @@ contract PCETest is Test {
         address spender = vm.addr(privateKeySpender);
         address to = address(0x5);
 
-        // Create PCECommunityTokenV7 using PCETokenV7's createToken method
+        // Create PCECommunityTokenV8 using PCETokenV8's createToken method
 
         address[] memory incomeTokens = new address[](0);
         address[] memory outgoTokens = new address[](0);
 
         vm.startPrank(address(this));
         pceToken.createToken(
-            "PCE Community Token V7",
-            "PCEV7",
+            "PCE Community Token V8",
+            "PCEV8",
             1000 ether, // Amount of PCEToken to exchange
             1 ether, // Dilution factor (1:1)
             1, // Decrease interval (days)
@@ -411,16 +411,16 @@ contract PCETest is Test {
 
         // Get the created token (it will be the last one in the list)
         address[] memory tokens = pceToken.getTokens();
-        PCECommunityTokenV7 tokenV7 = PCECommunityTokenV7(tokens[tokens.length - 1]);
+        PCECommunityTokenV8 tokenV8 = PCECommunityTokenV8(tokens[tokens.length - 1]);
 
         // Mint tokens to tokenOwner and set up allowance
-        tokenV7.mint(tokenOwner, 1000 ether);
+        tokenV8.mint(tokenOwner, 1000 ether);
 
-        // V7: Spender doesn't need to hold any tokens now since from pays everything
+        // V8: Spender doesn't need to hold any tokens now since from pays everything
         // No need to mint tokens to spender
 
         vm.prank(tokenOwner);
-        tokenV7.approve(spender, 100 ether);
+        tokenV8.approve(spender, 100 ether);
 
         // Prepare signature
         uint256 amount = 100 ether;
@@ -429,7 +429,7 @@ contract PCETest is Test {
         bytes32 nonce = keccak256("test_nonce");
 
         bytes32 structHash = keccak256(abi.encode(
-            tokenV7.TRANSFER_FROM_WITH_AUTHORIZATION_TYPEHASH(),
+            tokenV8.TRANSFER_FROM_WITH_AUTHORIZATION_TYPEHASH(),
             spender,
             tokenOwner,  // from
             to,
@@ -441,22 +441,22 @@ contract PCETest is Test {
 
         bytes32 digest = keccak256(abi.encodePacked(
             "\x19\x01",
-            tokenV7.DOMAIN_SEPARATOR(),
+            tokenV8.DOMAIN_SEPARATOR(),
             structHash
         ));
 
         (uint8 v, bytes32 r, bytes32 s) = vm.sign(privateKeySpender, digest);
 
-        uint256 initialOwnerBalance = tokenV7.balanceOf(tokenOwner);
-        uint256 initialSpenderBalance = tokenV7.balanceOf(spender);
-        uint256 initialToBalance = tokenV7.balanceOf(to);
-        uint256 initialExecutorBalance = tokenV7.balanceOf(user1);
-        uint256 initialAllowance = tokenV7.allowance(tokenOwner, spender);
+        uint256 initialOwnerBalance = tokenV8.balanceOf(tokenOwner);
+        uint256 initialSpenderBalance = tokenV8.balanceOf(spender);
+        uint256 initialToBalance = tokenV8.balanceOf(to);
+        uint256 initialExecutorBalance = tokenV8.balanceOf(user1);
+        uint256 initialAllowance = tokenV8.allowance(tokenOwner, spender);
 
 
         // Execute transferFromWithAuthorization
         vm.prank(user1); // Meta transaction executor
-        tokenV7.transferFromWithAuthorization(
+        tokenV8.transferFromWithAuthorization(
             spender,
             tokenOwner,  // from
             to,
@@ -469,19 +469,19 @@ contract PCETest is Test {
             s
         );
 
-        uint256 finalOwnerBalance = tokenV7.balanceOf(tokenOwner);
-        uint256 finalSpenderBalance = tokenV7.balanceOf(spender);
-        uint256 finalToBalance = tokenV7.balanceOf(to);
-        uint256 finalExecutorBalance = tokenV7.balanceOf(user1);
-        uint256 finalAllowance = tokenV7.allowance(tokenOwner, spender);
+        uint256 finalOwnerBalance = tokenV8.balanceOf(tokenOwner);
+        uint256 finalSpenderBalance = tokenV8.balanceOf(spender);
+        uint256 finalToBalance = tokenV8.balanceOf(to);
+        uint256 finalExecutorBalance = tokenV8.balanceOf(user1);
+        uint256 finalAllowance = tokenV8.allowance(tokenOwner, spender);
 
-        // V7: Verify results - from (owner) pays both amount and fee, spender signs the authorization
+        // V8: Verify results - from (owner) pays both amount and fee, spender signs the authorization
         assertTrue(finalOwnerBalance < initialOwnerBalance, "Owner balance should decrease (amount + fee)");
         assertEq(finalSpenderBalance, initialSpenderBalance, "Spender balance should stay the same");
         assertEq(finalToBalance, initialToBalance + amount, "To balance should increase by amount");
         assertTrue(finalExecutorBalance > initialExecutorBalance, "Executor should receive fee");
         assertEq(finalAllowance, initialAllowance - amount, "Allowance should decrease by amount");
-        assertTrue(tokenV7.authorizationState(spender, nonce), "Nonce should be marked as used for spender");
+        assertTrue(tokenV8.authorizationState(spender, nonce), "Nonce should be marked as used for spender");
 
     }
 
@@ -493,48 +493,48 @@ contract PCETest is Test {
         address spender = address(0x4);
         address to = address(0x5);
 
-        // Get the existing V7 token from setUp
+        // Get the existing V8 token from setUp
         address[] memory tokens = pceToken.getTokens();
-        PCECommunityTokenV7 tokenV7 = PCECommunityTokenV7(tokens[tokens.length - 1]);
+        PCECommunityTokenV8 tokenV8 = PCECommunityTokenV8(tokens[tokens.length - 1]);
 
         // Mint tokens to tokenOwner
-        tokenV7.mint(tokenOwner, 1000 ether);
+        tokenV8.mint(tokenOwner, 1000 ether);
 
         // Test 1: Normal transferFrom without infinity approve flag (should fail)
         uint256 amount = 100 ether;
         vm.prank(spender);
         vm.expectRevert();
-        tokenV7.transferFrom(tokenOwner, to, amount);
+        tokenV8.transferFrom(tokenOwner, to, amount);
 
         // Test 2: Set infinity approve flag
         vm.prank(tokenOwner);
-        tokenV7.setInfinityApproveFlag(spender, true);
+        tokenV8.setInfinityApproveFlag(spender, true);
 
         // Verify flag is set
-        assertTrue(tokenV7.getInfinityApproveFlag(tokenOwner, spender), "Infinity approve flag should be set");
+        assertTrue(tokenV8.getInfinityApproveFlag(tokenOwner, spender), "Infinity approve flag should be set");
 
         // Test 3: transferFrom with infinity approve flag (should succeed)
-        uint256 initialOwnerBalance = tokenV7.balanceOf(tokenOwner);
-        uint256 initialToBalance = tokenV7.balanceOf(to);
+        uint256 initialOwnerBalance = tokenV8.balanceOf(tokenOwner);
+        uint256 initialToBalance = tokenV8.balanceOf(to);
 
         vm.prank(spender);
-        bool success = tokenV7.transferFrom(tokenOwner, to, amount);
+        bool success = tokenV8.transferFrom(tokenOwner, to, amount);
 
         assertTrue(success, "Transfer should succeed with infinity approve flag");
-        assertTrue(tokenV7.balanceOf(tokenOwner) != initialOwnerBalance, "Owner balance should change");
-        assertEq(tokenV7.balanceOf(to), initialToBalance + amount, "To balance should increase");
+        assertTrue(tokenV8.balanceOf(tokenOwner) != initialOwnerBalance, "Owner balance should change");
+        assertEq(tokenV8.balanceOf(to), initialToBalance + amount, "To balance should increase");
 
         // Test 4: Disable infinity approve flag
         vm.prank(tokenOwner);
-        tokenV7.setInfinityApproveFlag(spender, false);
+        tokenV8.setInfinityApproveFlag(spender, false);
 
         // Verify flag is unset
-        assertFalse(tokenV7.getInfinityApproveFlag(tokenOwner, spender), "Infinity approve flag should be unset");
+        assertFalse(tokenV8.getInfinityApproveFlag(tokenOwner, spender), "Infinity approve flag should be unset");
 
         // Test 5: transferFrom without infinity approve flag (should fail again)
         vm.prank(spender);
         vm.expectRevert();
-        tokenV7.transferFrom(tokenOwner, to, amount);
+        tokenV8.transferFrom(tokenOwner, to, amount);
     }
 
     function testSetInfinityApproveFlagWithAuthorization() public {
@@ -544,12 +544,12 @@ contract PCETest is Test {
         address tokenOwner = vm.addr(privateKeyOwner);
         address spender = address(0x4);
 
-        // Get existing V7 token from setUp
+        // Get existing V8 token from setUp
         address[] memory tokens = pceToken.getTokens();
-        PCECommunityTokenV7 tokenV7 = PCECommunityTokenV7(tokens[tokens.length - 1]);
+        PCECommunityTokenV8 tokenV8 = PCECommunityTokenV8(tokens[tokens.length - 1]);
 
         // Mint tokens to tokenOwner for fee payment
-        tokenV7.mint(tokenOwner, 1000 ether);
+        tokenV8.mint(tokenOwner, 1000 ether);
 
         // Prepare signature for setInfinityApproveFlagWithAuthorization
         bool flag = true;
@@ -558,7 +558,7 @@ contract PCETest is Test {
         bytes32 nonce = keccak256("test_nonce_infinity_approve");
 
         bytes32 structHash = keccak256(abi.encode(
-            tokenV7.SET_INFINITY_APPROVE_FLAG_WITH_AUTHORIZATION_TYPEHASH(),
+            tokenV8.SET_INFINITY_APPROVE_FLAG_WITH_AUTHORIZATION_TYPEHASH(),
             tokenOwner,
             spender,
             flag,
@@ -569,7 +569,7 @@ contract PCETest is Test {
 
         bytes32 digest = keccak256(abi.encodePacked(
             "\x19\x01",
-            tokenV7.DOMAIN_SEPARATOR(),
+            tokenV8.DOMAIN_SEPARATOR(),
             structHash
         ));
 
@@ -577,7 +577,7 @@ contract PCETest is Test {
 
         // Execute setInfinityApproveFlagWithAuthorization
         vm.prank(user1); // Meta transaction executor
-        tokenV7.setInfinityApproveFlagWithAuthorization(
+        tokenV8.setInfinityApproveFlagWithAuthorization(
             tokenOwner,
             spender,
             flag,
@@ -590,7 +590,7 @@ contract PCETest is Test {
         );
 
         // Verify flag is set
-        assertTrue(tokenV7.getInfinityApproveFlag(tokenOwner, spender), "Infinity approve flag should be set");
-        assertTrue(tokenV7.authorizationState(tokenOwner, nonce), "Nonce should be marked as used");
+        assertTrue(tokenV8.getInfinityApproveFlag(tokenOwner, spender), "Infinity approve flag should be set");
+        assertTrue(tokenV8.authorizationState(tokenOwner, nonce), "Nonce should be marked as used");
     }
 }
