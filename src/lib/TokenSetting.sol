@@ -1,10 +1,9 @@
 // SPDX-License-Identifier: MIT
 pragma solidity 0.8.26;
 
-import { OwnableUpgradeable } from "@openzeppelin/contracts-upgradeable/access/OwnableUpgradeable.sol";
 import { ExchangeAllowMethod } from "./Enum.sol";
 
-contract TokenSetting is OwnableUpgradeable {
+abstract contract TokenSetting {
     uint256 public decreaseIntervalDays;
     uint256 public lastDecreaseTime;
     uint16 public afterDecreaseBp;
@@ -66,7 +65,7 @@ contract TokenSetting is OwnableUpgradeable {
         address[] calldata _outgoTargetTokens
     )
         public
-        onlyOwner
+        virtual
     {
         decreaseIntervalDays = _decreaseIntervalDays;
         afterDecreaseBp = _afterDecreaseBp;
