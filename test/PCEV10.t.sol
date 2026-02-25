@@ -198,7 +198,7 @@ contract PCEV10Test is Test {
         // Wednesday is day 6 in the epoch (0=Thursday)
         // Unix epoch starts on Thursday, Jan 1, 1970
 
-        // Pick a Monday and a Thursday in the same week (no Wednesday between)
+        // Pick a Monday and a Tuesday in the same week (no Wednesday between)
         uint256 monday = 1704067200; // 2024-01-01 Monday 00:00 UTC
         uint256 tuesday = monday + 1 days;
 
@@ -230,11 +230,8 @@ contract PCEV10Test is Test {
         // Find next Wednesday from current block.timestamp
         uint256 currentDay = block.timestamp / 1 days;
         uint256 currentWeekday = currentDay % 7; // 0=Thu, 6=Wed
-        uint256 daysUntilWednesday;
-        if (currentWeekday <= 6) {
-            daysUntilWednesday = (6 - currentWeekday) % 7;
-            if (daysUntilWednesday == 0) daysUntilWednesday = 7;
-        }
+        uint256 daysUntilWednesday = (6 - currentWeekday) % 7;
+        if (daysUntilWednesday == 0) daysUntilWednesday = 7;
 
         // Warp to just before Wednesday
         uint256 beforeWednesday = block.timestamp + (daysUntilWednesday * 1 days) - 1 hours;

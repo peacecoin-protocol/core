@@ -14,7 +14,7 @@ import { Utils } from "./lib/Utils.sol";
 import { ExchangeAllowMethod } from "./lib/Enum.sol";
 import { NativeMetaTransaction } from "./lib/polygon/NativeMetaTransaction.sol";
 import { Math } from "@openzeppelin/contracts/utils/math/Math.sol";
-/// @custom:oz-upgrades-from PCETokenV4
+/// @custom:oz-upgrades-from PCETokenV9
 
 contract PCETokenV10 is
     UUPSUpgradeable,
@@ -50,7 +50,7 @@ contract PCETokenV10 is
     );
 
     uint256 public constant INITIAL_FACTOR = 10 ** 18;
-    // 998/1000 = 0.02
+    // 998/1000 = 0.998 (represents a 0.2% decrease)
     uint256 public constant DECREASE_RATE = 998 * (10 ** 18);
     uint256 public constant DECREASE_RATE_BASE = 1000 * (10 ** 18);
 

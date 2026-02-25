@@ -18,7 +18,7 @@ import { VoucherSystem } from "./lib/VoucherSystem.sol";
 
 import { console2 } from "forge-std/console2.sol";
 
-/// @custom:oz-upgrades-from PCECommunityTokenV8
+/// @custom:oz-upgrades-from PCECommunityTokenV9
 
 contract PCECommunityTokenV10 is
     Initializable,
@@ -379,6 +379,7 @@ contract PCECommunityTokenV10 is
     }
 
     function mint(address to, uint256 displayBalance) external {
+        require(_msgSender() == owner() || _msgSender() == pceAddress, "Only owner or PCE token");
         updateFactorIfNeeded();
         _mint(to, displayBalanceToRawBalance(displayBalance));
     }
