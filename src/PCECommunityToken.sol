@@ -253,7 +253,8 @@ contract PCECommunityToken is
         uint256 remainingArigatoCreationMintToday = maxArigatoCreationMintToday - mintArigatoCreationToday;
         uint256 remainingArigatoCreationMintTodayForGuest;
 
-        AccountInfo memory accountInfo = _accountInfos[sender];
+        // Use storage to persist individual mint tracking across transactions
+        AccountInfo storage accountInfo = _accountInfos[sender];
 
         bool isGuest = accountInfo.firstTransactionTime == accountInfo.lastModifiedMidnightBalanceTime;
         if (isGuest) {
@@ -285,15 +286,27 @@ contract PCECommunityToken is
             mintAmount = remainingArigatoCreationMintToday;
         }
 
-        // ** Sender mint limit
+        // ** Sender mint limit (with cumulative tracking via storage)
+        // mintArigatoCreationToday initial value is 1 (gas optimization), subtract 1 for actual minted
+        uint256 actualMinted = accountInfo.mintArigatoCreationToday > 0
+            ? accountInfo.mintArigatoCreationToday - 1
+            : 0;
+
         if (!isGuest) {
             uint256 maxArigatoCreationMintTodayForSender =
                 Math.mulDiv(maxArigatoCreationMintToday, accountInfo.midnightBalance, midnightTotalSupply);
             if (maxArigatoCreationMintTodayForSender <= 0) {
                 return;
             }
-            if (mintAmount > maxArigatoCreationMintTodayForSender) {
-                mintAmount = maxArigatoCreationMintTodayForSender;
+            // Check cumulative sender limit
+            uint256 remainingSenderCap = maxArigatoCreationMintTodayForSender > actualMinted
+                ? maxArigatoCreationMintTodayForSender - actualMinted
+                : 0;
+            if (remainingSenderCap == 0) {
+                return;
+            }
+            if (mintAmount > remainingSenderCap) {
+                mintAmount = remainingSenderCap;
             }
         } else {
             // Guest can mint only 1% of maxArigatoCreationMintToday
@@ -304,8 +317,15 @@ contract PCECommunityToken is
             if (maxArigatoCreationMintTodayForGuestSender <= 0) {
                 return;
             }
-            if (mintAmount > maxArigatoCreationMintTodayForGuestSender) {
-                mintAmount = maxArigatoCreationMintTodayForGuestSender;
+            // Check cumulative guest sender limit
+            uint256 remainingGuestSenderCap = maxArigatoCreationMintTodayForGuestSender > actualMinted
+                ? maxArigatoCreationMintTodayForGuestSender - actualMinted
+                : 0;
+            if (remainingGuestSenderCap == 0) {
+                return;
+            }
+            if (mintAmount > remainingGuestSenderCap) {
+                mintAmount = remainingGuestSenderCap;
             }
         }
 
