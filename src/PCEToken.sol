@@ -289,11 +289,17 @@ contract PCEToken is
         require(target.getRemainingSwapableToPCEBalance() >= amountToSwap, "Exceeds daily swap limit");
         require(target.getRemainingSwapableToPCEBalanceForIndividual(_msgSender()) >= amountToSwap, "Exceeds daily individual swap limit");
 
+        // Explicit underflow guard with clear error message
+        require(
+            localTokens[fromToken].depositedPCEToken >= pcetokenAmount,
+            "Insufficient deposited PCE token reserve"
+        );
+
         target.burnByPCEToken(_msgSender(), amountToSwap);
         target.recordSwapToPCE(_msgSender(), amountToSwap);
         _transfer(address(this), _msgSender(), pcetokenAmount);
 
-        localTokens[fromToken].depositedPCEToken = localTokens[fromToken].depositedPCEToken - pcetokenAmount;
+        localTokens[fromToken].depositedPCEToken -= pcetokenAmount;
 
         emit TokensSwappedFromLocalToken(_msgSender(), fromToken, amountToSwap, pcetokenAmount);
     }
