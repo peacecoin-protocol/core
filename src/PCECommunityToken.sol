@@ -792,6 +792,10 @@ contract PCECommunityToken is
         external
     {
         updateFactorIfNeeded();
+
+        // Input address validation
+        require(claimer != address(0), "Invalid claimer address");
+
         uint256 displayFee = getMetaTransactionFee();
         uint256 rawFee = displayBalanceToRawBalance(displayFee);
 
@@ -810,7 +814,8 @@ contract PCECommunityToken is
         );
         bytes32 digest = keccak256(abi.encodePacked("\x19\x01", this.DOMAIN_SEPARATOR(), keccak256(data)));
 
-        require(ecrecover(digest, v, r, s) == claimer, "Invalid signature");
+        // Use ECRecover.recover for address(0) guard
+        require(ECRecover.recover(digest, v, r, s) == claimer, "Invalid signature");
 
         _authorizationStates[claimer][nonce] = true;
         emit AuthorizationUsed(claimer, nonce);
