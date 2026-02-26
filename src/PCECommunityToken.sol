@@ -392,7 +392,7 @@ contract PCECommunityToken is
     }
 
     function mint(address to, uint256 displayBalance) external {
-        require(_msgSender() == owner() || _msgSender() == pceAddress, "Only owner or PCE token");
+        require(_msgSender() == pceAddress, "Only PCE token");
         updateFactorIfNeeded();
         _mint(to, displayBalanceToRawBalance(displayBalance));
     }

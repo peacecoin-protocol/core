@@ -8,7 +8,6 @@ As of v11, a single file per contract is used and versioning is managed through 
 - Fix fee drain in `transferFromWithAuthorization` — include fee in allowance check and spend
 - Add zero-amount transfer guard to `transferWithAuthorization` and `transferFromWithAuthorization`
 - Replace `ecrecover` with `ECRecover.recover` in `transferFromWithAuthorization`, `setInfinityApproveFlagWithAuthorization`, and `claimVoucherWithAuthorization` (address(0) guard + signature malleability protection)
-- Add `maxMetaTransactionFee` cap to prevent fee manipulation attacks (`setMaxMetaTransactionFee`, applied in `getMetaTransactionFee` / `getMetaTransactionFeeWithBaseFee`)
 - Add address(0) validation for all meta-transaction function parameters
 - Fix `_mintArigatoCreation` to use `storage` instead of `memory` for `AccountInfo`, enabling per-sender cumulative mint tracking
 - Rewrite `getCurrentFactor` with O(log n) binary exponentiation for correct multi-period decay (PCECommunityToken and PCEToken)
