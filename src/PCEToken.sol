@@ -13,6 +13,7 @@ import { PCECommunityToken } from "./PCECommunityToken.sol";
 import { Utils } from "./lib/Utils.sol";
 import { ExchangeAllowMethod } from "./lib/Enum.sol";
 import { NativeMetaTransaction } from "./lib/polygon/NativeMetaTransaction.sol";
+import { Math } from "@openzeppelin/contracts/utils/math/Math.sol";
 
 contract PCEToken is
     UUPSUpgradeable,
@@ -48,7 +49,7 @@ contract PCEToken is
     );
 
     uint256 public constant INITIAL_FACTOR = 10 ** 18;
-    // 998/1000 = 0.02
+    // 998/1000 = 0.998 (represents a 0.2% decrease)
     uint256 public constant DECREASE_RATE = 998 * (10 ** 18);
     uint256 public constant DECREASE_RATE_BASE = 1000 * (10 ** 18);
 
@@ -56,30 +57,14 @@ contract PCEToken is
     uint256 public lastDecreaseTime;
     uint256 public lastModifiedFactor;
 
-    function initialize(
-        string memory _name,
-        string memory _symbol,
-        address communityTokenAddress,
-        address _polygonChainManager
-    )
-        public
-        initializer
-    {
-        __ERC20_init(_name, _symbol);
+    function initialize() public initializer {
+        __ERC20_init("PCE Token", "PCE");
         __Ownable_init(_msgSender());
-        _mint(_msgSender(), 10_000_000 * INITIAL_FACTOR);
-        // initial rate is 1(NativeToken):5(PCEToken) = 5<<96 = 396140812571321687967719751680
-        nativeTokenToPceTokenRate = 396_140_812_571_321_687_967_719_751_680;
-        metaTransactionGas = 200_000;
-        metaTransactionPriorityFee = 50_000_000_000; // 50 gwei
-        swapableToPCERate = 300; // 300BP is 3%
-        swapableToPCEIndividualRate = 300; // 300BP is 3%
-
-        _communityTokenAddress = communityTokenAddress;
+        __ERC20Burnable_init();
+        _initializeEIP712("PCE Token");
         epochTime = block.timestamp;
         lastDecreaseTime = block.timestamp;
         lastModifiedFactor = INITIAL_FACTOR;
-        polygonChainManager = _polygonChainManager;
     }
 
     function getLocalToken(address communityToken) public view returns (Utils.LocalToken memory) {
@@ -91,7 +76,7 @@ contract PCEToken is
             return 0;
         }
         if (hasDecreaseTimeWithin(lastDecreaseTime, block.timestamp)) {
-            return (lastModifiedFactor * DECREASE_RATE) / DECREASE_RATE_BASE;
+            return Math.mulDiv(lastModifiedFactor, DECREASE_RATE, DECREASE_RATE_BASE);
         } else {
             return lastModifiedFactor;
         }
@@ -124,7 +109,7 @@ contract PCEToken is
         return super.approve(spender, balance);
     }
 
-    function mint(address to, uint256 balance) external {
+    function mint(address to, uint256 balance) external onlyOwner {
         updateFactorIfNeeded();
         _mint(to, balance);
     }
@@ -164,7 +149,12 @@ contract PCEToken is
 
         BeaconProxy proxy = new BeaconProxy(
             _communityTokenAddress,
-            abi.encodeWithSelector(PCECommunityToken(address(0)).initialize.selector, name, symbol, lastModifiedFactor)
+            abi.encodeWithSelector(
+                PCECommunityToken(address(0)).initialize.selector,
+                name,
+                symbol,
+                lastModifiedFactor
+            )
         );
         address newTokenAddress = address(proxy);
         PCECommunityToken newToken = PCECommunityToken(newTokenAddress);
@@ -211,7 +201,30 @@ contract PCEToken is
         PCECommunityToken target = PCECommunityToken(toToken);
 
         return (((localTokens[toToken].exchangeRate << 96) / INITIAL_FACTOR) * target.getCurrentFactor())
-            / lastModifiedFactor;
+            / getCurrentFactor();
+    }
+
+    function getSwapRateBetweenTokens(address fromToken, address toToken) public view returns (uint256) {
+        require(localTokens[fromToken].isExists, "From token not found");
+        require(localTokens[toToken].isExists, "Target token not found");
+
+        PCECommunityToken fromTarget = PCECommunityToken(fromToken);
+        PCECommunityToken toTarget = PCECommunityToken(toToken);
+
+        uint256 exchangeRateRatio = Math.mulDiv(
+            localTokens[toToken].exchangeRate,
+            INITIAL_FACTOR,
+            localTokens[fromToken].exchangeRate
+        );
+
+        uint256 currentFactorRatio = Math.mulDiv(
+            toTarget.getCurrentFactor(),
+            INITIAL_FACTOR,
+            fromTarget.getCurrentFactor()
+        );
+
+        uint256 result = Math.mulDiv(exchangeRateRatio, currentFactorRatio, INITIAL_FACTOR);
+        return result;
     }
 
     function swapToLocalToken(address toToken, uint256 amountToSwap) public {
@@ -222,9 +235,11 @@ contract PCEToken is
         PCECommunityToken target = PCECommunityToken(toToken);
         target.updateFactorIfNeeded();
 
-        uint256 targetTokenAmount = (
-            ((amountToSwap * localTokens[toToken].exchangeRate) / INITIAL_FACTOR) * target.getCurrentFactor()
-        ) / lastModifiedFactor;
+        uint256 targetTokenAmount = Math.mulDiv(
+            Math.mulDiv(amountToSwap, localTokens[toToken].exchangeRate, INITIAL_FACTOR),
+            target.getCurrentFactor(),
+            lastModifiedFactor
+        );
         require(targetTokenAmount > 0, "Invalid amount to swap");
 
         _transfer(_msgSender(), address(this), amountToSwap);
@@ -244,15 +259,18 @@ contract PCEToken is
 
         require(target.balanceOf(_msgSender()) >= amountToSwap, "Insufficient balance");
 
-        uint256 pcetokenAmount = (
-            ((amountToSwap * INITIAL_FACTOR) / localTokens[fromToken].exchangeRate) * lastModifiedFactor
-        ) / target.getCurrentFactor();
+        uint256 pcetokenAmount = Math.mulDiv(
+            Math.mulDiv(amountToSwap, INITIAL_FACTOR, localTokens[fromToken].exchangeRate),
+            lastModifiedFactor,
+            target.getCurrentFactor()
+        );
         require(pcetokenAmount > 0, "Target token deposit low");
 
-        require(target.getTodaySwapableToPCEBalance() >= amountToSwap, "Insufficient balance");
-        require(target.getTodaySwapableToPCEBalanceForIndividual(_msgSender()) >= amountToSwap, "Insufficient balance");
+        require(target.getRemainingSwapableToPCEBalance() >= amountToSwap, "Exceeds daily swap limit");
+        require(target.getRemainingSwapableToPCEBalanceForIndividual(_msgSender()) >= amountToSwap, "Exceeds daily individual swap limit");
 
-        target.burnFrom(_msgSender(), amountToSwap);
+        target.burnByPCEToken(_msgSender(), amountToSwap);
+        target.recordSwapToPCE(_msgSender(), amountToSwap);
         _transfer(address(this), _msgSender(), pcetokenAmount);
 
         localTokens[fromToken].depositedPCEToken = localTokens[fromToken].depositedPCEToken - pcetokenAmount;
@@ -260,13 +278,7 @@ contract PCEToken is
         emit TokensSwappedFromLocalToken(_msgSender(), fromToken, amountToSwap, pcetokenAmount);
     }
 
-    /*
-        @notice return rate shifted 96bit.
-                (NativeToken * rate) >> 96 = PceToken
-                (PceToken * ( 1 << 96 ) ) / rate = NativeToken
-    */
     function getNativeTokenToPceTokenRate() public view returns (uint256) {
-        // TODO: Get the rate dynamically from Oracle or defi such as uniswap.
         return nativeTokenToPceTokenRate;
     }
 
@@ -286,17 +298,18 @@ contract PCEToken is
         return block.basefee;
     }
 
-    /*
-        @notice Returns the fee in PCE token for the meta transaction in the current block.
-    */
     function getMetaTransactionFee() public view returns (uint256) {
         uint256 nativeTokenFee = metaTransactionGas * (block.basefee + metaTransactionPriorityFee);
-        return (nativeTokenFee * getNativeTokenToPceTokenRate()) >> 96;
+        return Math.mulDiv(nativeTokenFee, getNativeTokenToPceTokenRate(), 2**96);
+    }
+
+    function getMetaTransactionFeeWithBaseFee(uint256 _baseFee) public view returns (uint256) {
+        uint256 nativeTokenFee = metaTransactionGas * (_baseFee + metaTransactionPriorityFee);
+        return Math.mulDiv(nativeTokenFee, getNativeTokenToPceTokenRate(), 2**96);
     }
 
     function hasDecreaseTimeWithin(uint256 _start, uint256 _end) public pure returns (bool) {
-        return getElapsedMinutes(_start, _end) > 1;
-        //return isWednesdayBetween(_start, _end);
+        return isWednesdayBetween(_start, _end);
     }
 
     function getElapsedMinutes(uint256 _start, uint256 _end) public pure returns (uint256) {
@@ -329,7 +342,7 @@ contract PCEToken is
             return true;
         } else {
             uint256 startWeek = startDay / 7;
-            uint256 endWeek = startDay / 7;
+            uint256 endWeek = endDay / 7;
             return startWeek != endWeek;
         }
     }
@@ -348,6 +361,6 @@ contract PCEToken is
     function _authorizeUpgrade(address newImplementation) internal virtual override onlyOwner { }
 
     function version() public pure returns (string memory) {
-        return "1.0.0";
+        return "1.0.11";
     }
 }
