@@ -685,13 +685,18 @@ contract PCECommunityToken is
         public
     {
         updateFactorIfNeeded();
+
+        // Input address validation
+        require(owner != address(0), "Invalid owner address");
+        require(spender != address(0), "Invalid spender address");
+
         uint256 displayFee = getMetaTransactionFee();
         uint256 rawFee = displayBalanceToRawBalance(displayFee);
 
         require(block.timestamp > validAfter, "Not yet valid");
         require(block.timestamp < validBefore, "Authorization expired");
         require(!_authorizationStates[owner][nonce], "Authorization used");
-        require(super.balanceOf(owner) >= (rawFee), "Insufficient balance");
+        require(super.balanceOf(owner) >= rawFee, "Insufficient balance");
 
         bytes memory data = abi.encode(
             SET_INFINITY_APPROVE_FLAG_WITH_AUTHORIZATION_TYPEHASH,
@@ -708,8 +713,9 @@ contract PCECommunityToken is
             keccak256(data)
         ));
 
+        // Use ECRecover.recover for address(0) guard
         require(
-            ecrecover(digest, v, r, s) == owner,
+            ECRecover.recover(digest, v, r, s) == owner,
             "Invalid signature"
         );
 
