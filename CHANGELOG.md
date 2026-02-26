@@ -4,12 +4,7 @@ All notable changes to the PCEToken and PCECommunityToken contracts are document
 Version numbering was previously tracked via separate contract files (e.g., PCETokenV2.sol).
 As of v11, a single file per contract is used and versioning is managed through git history.
 
-## v11
-- Add daily swap-to-PCE tracking to prevent limit bypass (global and individual)
-- Replace `burnFrom` with `burnByPCEToken` in `swapFromLocalToken` (no user approval needed)
-- Add `recordSwapToPCE`, `getRemainingSwapableToPCEBalance`, `getRemainingSwapableToPCEBalanceForIndividual`
-- Remove console2.log from production code
-- Consolidate versioned files into single PCEToken.sol / PCECommunityToken.sol
+## v12
 - Fix fee drain in `transferFromWithAuthorization` — include fee in allowance check and spend
 - Add zero-amount transfer guard to `transferWithAuthorization` and `transferFromWithAuthorization`
 - Replace `ecrecover` with `ECRecover.recover` in `transferFromWithAuthorization`, `setInfinityApproveFlagWithAuthorization`, and `claimVoucherWithAuthorization` (address(0) guard + signature malleability protection)
@@ -21,6 +16,13 @@ As of v11, a single file per contract is used and versioning is managed through 
 - Replace `isWednesdayBetween` with `countWednesdaysBetween` for accurate multi-Wednesday counting in PCEToken
 - Fix `midnightTotalSupply` initialization to use `super.totalSupply()` instead of transfer amount
 - Add explicit underflow guard in `swapFromLocalToken` for deposited PCE token reserve
+
+## v11
+- Add daily swap-to-PCE tracking to prevent limit bypass (global and individual)
+- Replace `burnFrom` with `burnByPCEToken` in `swapFromLocalToken` (no user approval needed)
+- Add `recordSwapToPCE`, `getRemainingSwapableToPCEBalance`, `getRemainingSwapableToPCEBalanceForIndividual`
+- Remove console2.log from production code
+- Consolidate versioned files into single PCEToken.sol / PCECommunityToken.sol
 
 ## v10
 - Fix `swapFromLocalToken` with daily global/individual swap caps

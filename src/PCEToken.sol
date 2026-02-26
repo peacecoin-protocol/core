@@ -384,6 +384,6 @@ contract PCEToken is
     function _authorizeUpgrade(address newImplementation) internal virtual override onlyOwner { }
 
     function version() public pure returns (string memory) {
-        return "1.0.11";
+        return "1.0.12";
     }
 }

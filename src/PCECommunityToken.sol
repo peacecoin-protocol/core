@@ -947,6 +947,6 @@ contract PCECommunityToken is
     }
 
     function version() public pure returns (string memory) {
-        return "1.0.11";
+        return "1.0.12";
     }
 }
