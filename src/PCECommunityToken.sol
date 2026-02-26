@@ -153,10 +153,20 @@ contract PCECommunityToken is
         PCEToken pceToken = PCEToken(pceAddress);
         pceToken.updateFactorIfNeeded();
 
+        if (decreaseIntervalDays == 0) return;
+
+        uint256 startDay = lastDecreaseTime / 1 days;
+        uint256 endDay = block.timestamp / 1 days;
+        if (endDay <= startDay) return;
+        uint256 elapsed = endDay - startDay;
+        if (elapsed < decreaseIntervalDays) return;
+
+        uint256 times = elapsed / decreaseIntervalDays;
         uint256 currentFactor = getCurrentFactor();
         if (currentFactor != lastModifiedFactor) {
             lastModifiedFactor = currentFactor;
-            lastDecreaseTime = block.timestamp;
+            // Advance to the last decay boundary, not block.timestamp
+            lastDecreaseTime = (startDay + (times * decreaseIntervalDays)) * 1 days;
         }
     }
 
