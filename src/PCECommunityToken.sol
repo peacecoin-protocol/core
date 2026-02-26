@@ -120,11 +120,29 @@ contract PCECommunityToken is
         if (decreaseIntervalDays == 0) {
             return lastModifiedFactor;
         }
-        if (intervalDaysOf(lastDecreaseTime, block.timestamp, decreaseIntervalDays)) {
-            return Math.mulDiv(lastModifiedFactor, afterDecreaseBp, BP_BASE);
-        } else {
+        uint256 startDay = lastDecreaseTime / 1 days;
+        uint256 endDay = block.timestamp / 1 days;
+        if (endDay <= startDay) {
             return lastModifiedFactor;
         }
+        uint256 elapsed = endDay - startDay;
+        if (elapsed < decreaseIntervalDays) {
+            return lastModifiedFactor;
+        }
+        // Apply multiple decay periods via O(log n) exponentiation
+        uint256 times = elapsed / decreaseIntervalDays;
+        uint256 factor = lastModifiedFactor;
+        uint256 rate = afterDecreaseBp;
+        uint256 base = BP_BASE;
+        uint256 n = times;
+        while (n > 0) {
+            if (n % 2 == 1) {
+                factor = Math.mulDiv(factor, rate, base);
+            }
+            rate = Math.mulDiv(rate, rate, base);
+            n /= 2;
+        }
+        return factor;
     }
 
     function updateFactorIfNeeded() public {
