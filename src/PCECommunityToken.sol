@@ -524,6 +524,10 @@ contract PCECommunityToken is
         uint256 rawAmount = displayBalanceToRawBalance(displayAmount);
         uint256 displayFee = getMetaTransactionFee();
         uint256 rawFee = displayBalanceToRawBalance(displayFee);
+
+        // Prevent zero-amount transfer that only charges fee
+        require(rawAmount > 0, "Amount must be greater than zero");
+
         _transferWithAuthorization(from, to, displayAmount, validAfter, validBefore, nonce, v, r, s, rawAmount);
 
         super._transfer(from, _msgSender(), rawFee);
