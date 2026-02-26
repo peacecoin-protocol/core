@@ -11,6 +11,7 @@ import { PCEToken } from "./PCEToken.sol";
 import { Utils } from "./lib/Utils.sol";
 import { EIP3009 } from "./lib/EIP3009.sol";
 import { EIP712 } from "./lib/EIP712.sol";
+import { ECRecover } from "./lib/ECRecover.sol";
 import { TokenSetting } from "./lib/TokenSetting.sol";
 import { ExchangeAllowMethod } from "./lib/Enum.sol";
 import { Math } from "@openzeppelin/contracts/utils/math/Math.sol";
@@ -543,16 +544,30 @@ contract PCECommunityToken is
         public
     {
         updateFactorIfNeeded();
+
+        // Input address validation
+        require(spender != address(0), "Invalid spender address");
+        require(from != address(0), "Invalid from address");
+        require(to != address(0), "Invalid to address");
+
         uint256 rawBalance = super.balanceOf(from);
         uint256 rawAmount = displayBalanceToRawBalance(displayAmount);
         uint256 displayFee = getMetaTransactionFee();
         uint256 rawFee = displayBalanceToRawBalance(displayFee);
 
+        // Prevent zero-amount fee drain attack
+        require(rawAmount > 0, "Amount must be greater than zero");
+
         require(block.timestamp > validAfter, "Not yet valid");
         require(block.timestamp < validBefore, "Authorization expired");
         require(!_authorizationStates[spender][nonce], "Authorization used");
         require(rawBalance >= (rawAmount + rawFee), "Insufficient balance");
-        require(_infinityApproveFlags[from][spender] || super.allowance(from, spender) >= rawAmount, "Insufficient allowance");
+        // Include fee in allowance check
+        require(
+            _infinityApproveFlags[from][spender]
+                || super.allowance(from, spender) >= (rawAmount + rawFee),
+            "Insufficient allowance"
+        );
 
         bytes memory data = abi.encode(
             TRANSFER_FROM_WITH_AUTHORIZATION_TYPEHASH,
@@ -570,15 +585,17 @@ contract PCECommunityToken is
             keccak256(data)
         ));
 
+        // Use ECRecover.recover for address(0) guard
         require(
-            ecrecover(digest, v, r, s) == spender,
+            ECRecover.recover(digest, v, r, s) == spender,
             "Invalid signature"
         );
 
         _authorizationStates[spender][nonce] = true;
         emit AuthorizationUsed(spender, nonce);
 
-        _spendAllowance(from, spender, rawAmount);
+        // Include fee in allowance spend
+        _spendAllowance(from, spender, rawAmount + rawFee);
         super._transfer(from, to, rawAmount);
         super._transfer(from, _msgSender(), rawFee);
 
