@@ -75,11 +75,24 @@ contract PCEToken is
         if (lastModifiedFactor == 0) {
             return 0;
         }
-        if (hasDecreaseTimeWithin(lastDecreaseTime, block.timestamp)) {
-            return Math.mulDiv(lastModifiedFactor, DECREASE_RATE, DECREASE_RATE_BASE);
-        } else {
+        // Count actual Wednesdays crossed for multiple-week decay
+        uint256 times = countWednesdaysBetween(lastDecreaseTime, block.timestamp);
+        if (times == 0) {
             return lastModifiedFactor;
         }
+        // O(log n) exponentiation
+        uint256 factor = lastModifiedFactor;
+        uint256 rate = DECREASE_RATE;
+        uint256 base = DECREASE_RATE_BASE;
+        uint256 n = times;
+        while (n > 0) {
+            if (n % 2 == 1) {
+                factor = Math.mulDiv(factor, rate, base);
+            }
+            rate = Math.mulDiv(rate, rate, base);
+            n /= 2;
+        }
+        return factor;
     }
 
     function updateFactorIfNeeded() public {
@@ -87,10 +100,17 @@ contract PCEToken is
             return;
         }
 
+        uint256 times = countWednesdaysBetween(lastDecreaseTime, block.timestamp);
+        if (times == 0) return;
+
         uint256 currentFactor = getCurrentFactor();
         if (currentFactor != lastModifiedFactor) {
             lastModifiedFactor = currentFactor;
-            lastDecreaseTime = block.timestamp;
+            // Advance to the last Wednesday boundary, not block.timestamp
+            uint256 endDay = block.timestamp / 1 days;
+            uint256 endWeekday = endDay % 7;
+            uint256 lastWedDay = endDay - ((endWeekday + 1) % 7);
+            lastDecreaseTime = lastWedDay * 1 days;
         }
     }
 
@@ -321,30 +341,27 @@ contract PCEToken is
         return elapsedMinutes;
     }
 
-    function isWednesdayBetween(uint256 start, uint256 end) public pure returns (bool) {
-        require(start <= end, "Start time must be <= end");
-        if (start == end) {
-            return false;
-        }
+    /// @notice Count the number of Wednesdays strictly between start and end timestamps.
+    /// Start day (if Wednesday) is excluded; the next Wednesday is the first counted.
+    function countWednesdaysBetween(uint256 start, uint256 end) public pure returns (uint256) {
         uint256 startDay = start / 1 days;
         uint256 endDay = end / 1 days;
-        if (startDay == endDay) {
-            return false;
-        }
+        if (startDay >= endDay) return 0;
 
-        // 0 = Thursday, 1 = Friday, 2 = Saturday, ..., 6 = Wednesday
-        uint256 startWeekday = startDay % 7;
-        uint256 endWeekday = endDay % 7;
+        // Find the first Wednesday strictly after startDay
+        // 0=Thursday, 1=Friday, ..., 6=Wednesday
+        uint256 nextDay = startDay + 1;
+        uint256 nextWeekday = nextDay % 7;
+        uint256 daysToNextWed = (6 - nextWeekday + 7) % 7;
+        uint256 firstWed = nextDay + daysToNextWed;
 
-        if (startWeekday != 6 && startWeekday >= endWeekday) {
-            return true;
-        } else if (endWeekday == 6) {
-            return true;
-        } else {
-            uint256 startWeek = startDay / 7;
-            uint256 endWeek = endDay / 7;
-            return startWeek != endWeek;
-        }
+        if (firstWed > endDay) return 0;
+        return ((endDay - firstWed) / 7) + 1;
+    }
+
+    function isWednesdayBetween(uint256 start, uint256 end) public pure returns (bool) {
+        require(start <= end, "Start time must be <= end");
+        return countWednesdaysBetween(start, end) > 0;
     }
 
     // for polygon bridge
