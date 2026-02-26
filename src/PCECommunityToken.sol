@@ -202,7 +202,8 @@ contract PCECommunityToken is
 
     function _beforeTokenTransfer(address from, address to, uint256 amount) internal {
         if (midnightTotalSupplyModifiedTime == 0) {
-            midnightTotalSupply = amount;
+            // Use total supply instead of transfer amount to prevent manipulation
+            midnightTotalSupply = super.totalSupply();
             midnightTotalSupplyModifiedTime = block.timestamp;
         } else if (intervalDaysOf(midnightTotalSupplyModifiedTime, block.timestamp, 1)) {
             midnightTotalSupply = super.totalSupply();
