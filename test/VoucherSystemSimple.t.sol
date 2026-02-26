@@ -2,15 +2,15 @@
 pragma solidity 0.8.26;
 
 import { Test, console2 } from "forge-std/Test.sol";
-import { PCECommunityTokenV9 } from "../src/PCECommunityTokenV9.sol";
-import { PCETokenV9 } from "../src/PCETokenV9.sol";
+import { PCECommunityToken } from "../src/PCECommunityToken.sol";
+import { PCEToken } from "../src/PCEToken.sol";
 import { ExchangeAllowMethod } from "../src/lib/Enum.sol";
 import { BeaconProxy } from "@openzeppelin/contracts/proxy/beacon/BeaconProxy.sol";
 import { UpgradeableBeacon } from "@openzeppelin/contracts/proxy/beacon/UpgradeableBeacon.sol";
 
 contract VoucherSystemSimpleTest is Test {
-    PCETokenV9 public pceToken;
-    PCECommunityTokenV9 public token;
+    PCEToken public pceToken;
+    PCECommunityToken public token;
     UpgradeableBeacon public beacon;
 
     address public owner;
@@ -37,13 +37,13 @@ contract VoucherSystemSimpleTest is Test {
         claimer1 = address(0x2);
 
         // Deploy implementation
-        PCECommunityTokenV9 impl = new PCECommunityTokenV9();
+        PCECommunityToken impl = new PCECommunityToken();
 
         // Deploy beacon
         beacon = new UpgradeableBeacon(address(impl), owner);
 
         // Deploy PCEToken
-        pceToken = new PCETokenV9();
+        pceToken = new PCEToken();
 
         vm.startPrank(owner);
 
@@ -80,7 +80,7 @@ contract VoucherSystemSimpleTest is Test {
         );
 
         address[] memory tokens = pceToken.getTokens();
-        token = PCECommunityTokenV9(tokens[0]);
+        token = PCECommunityToken(tokens[0]);
 
         // Transfer tokens to issuer
         token.transfer(issuer, 100 ether);
@@ -147,7 +147,7 @@ contract VoucherSystemSimpleTest is Test {
         );
 
         address[] memory tokens = pceToken.getTokens();
-        token = PCECommunityTokenV9(tokens[0]);
+        token = PCECommunityToken(tokens[0]);
         token.transfer(issuer, 100 ether);
         vm.stopPrank();
 
