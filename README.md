@@ -154,6 +154,42 @@ Deploy to Polygon Amoy:
 $ forge script script/Deploy.s.sol --broadcast --fork-url amoy --interactives 1
 ```
 
+### Upgrade
+
+Use `script/upgrade.sh` to upgrade deployed contracts. This wrapper script automatically validates storage layout
+compatibility against the previous version before executing the forge upgrade script.
+
+```sh
+# Usage: ./script/upgrade.sh <FORGE_SCRIPT> [FORGE_ARGS...]
+# The previous version is auto-detected from the latest git tag.
+
+# DEV environment (Polygon Amoy)
+$ ./script/upgrade.sh script/UpgradeDEV.s.sol --broadcast --fork-url polygon --interactives 1
+
+# Production (Polygon mainnet)
+$ ./script/upgrade.sh script/Upgrade.s.sol --broadcast --fork-url polygon --interactives 1
+
+# Override auto-detection if needed
+$ PREV_TAG=v10 ./script/upgrade.sh script/UpgradeDEV.s.sol --broadcast --fork-url polygon --interactives 1
+```
+
+**How it works:**
+
+1. Checks out the previous version (git tag) into a temporary worktree and builds it
+2. Runs OpenZeppelin's `upgrades-core` CLI to validate storage layout compatibility between the previous and current versions
+3. If validation passes, executes the forge upgrade script
+4. Cleans up temporary files automatically
+
+This approach works with both pre-consolidation tags (v2-v10, where contracts were named `PCETokenV10.sol` etc.)
+and post-consolidation tags (v11+, where contracts use `PCEToken.sol`).
+
+**Important:** After each upgrade, tag the release:
+
+```sh
+$ git tag v12
+$ git push origin v12
+```
+
 ### Format
 
 Format the contracts:
