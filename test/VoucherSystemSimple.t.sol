@@ -5,6 +5,7 @@ import { Test } from "forge-std/Test.sol";
 import { PCECommunityToken } from "../src/PCECommunityToken.sol";
 import { PCEToken } from "../src/PCEToken.sol";
 import { ExchangeAllowMethod } from "../src/lib/Enum.sol";
+import { VoucherSystem } from "../src/lib/VoucherSystem.sol";
 import { UpgradeableBeacon } from "@openzeppelin/contracts/proxy/beacon/UpgradeableBeacon.sol";
 
 contract VoucherSystemSimpleTest is Test {
@@ -181,7 +182,7 @@ contract VoucherSystemSimpleTest is Test {
         token.claimVoucher("VOUCHER001", "CODE001", proof0);
 
         // Second claim should fail (limit per user is 1)
-        vm.expectRevert("Claim count reached limitation");
+        vm.expectRevert(VoucherSystem.ClaimLimitReached.selector);
         token.claimVoucher("VOUCHER001", "CODE001", proof0);
         vm.stopPrank();
     }

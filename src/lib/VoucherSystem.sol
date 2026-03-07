@@ -4,17 +4,31 @@ pragma solidity 0.8.30;
 import { MerkleProof } from "@openzeppelin/contracts/utils/cryptography/MerkleProof.sol";
 
 library VoucherSystem {
-    // Error codes for canClaim function
-    uint8 public constant ERROR_NONE = 0;
-    uint8 public constant ERROR_ISSUANCE_NOT_FOUND = 1;
-    uint8 public constant ERROR_ISSUANCE_NOT_ACTIVE = 2;
-    uint8 public constant ERROR_NOT_STARTED = 3;
-    uint8 public constant ERROR_ALREADY_ENDED = 4;
-    uint8 public constant ERROR_CLAIM_LIMIT_REACHED = 5;
-    uint8 public constant ERROR_INSUFFICIENT_FUNDS = 6;
-    uint8 public constant ERROR_MAX_TOTAL_EXCEEDED = 7;
-    uint8 public constant ERROR_INVALID_PROOF = 8;
-    uint8 public constant ERROR_CODE_ALREADY_USED = 9;
+    uint8 internal constant ERROR_NONE = 0;
+    uint8 internal constant ERROR_ISSUANCE_NOT_FOUND = 1;
+    uint8 internal constant ERROR_ISSUANCE_NOT_ACTIVE = 2;
+    uint8 internal constant ERROR_NOT_STARTED = 3;
+    uint8 internal constant ERROR_ALREADY_ENDED = 4;
+    uint8 internal constant ERROR_CLAIM_LIMIT_REACHED = 5;
+    uint8 internal constant ERROR_INSUFFICIENT_FUNDS = 6;
+    uint8 internal constant ERROR_MAX_TOTAL_EXCEEDED = 7;
+    uint8 internal constant ERROR_INVALID_PROOF = 8;
+    uint8 internal constant ERROR_CODE_ALREADY_USED = 9;
+
+    error IssuanceNotFound();
+    error IssuanceAlreadyExists();
+    error IssuanceNotActive();
+    error IssuanceNotStarted();
+    error IssuanceAlreadyEnded();
+    error ClaimLimitReached();
+    error NoClaimableAmount();
+    error TotalAmountLimitExceeded();
+    error InvalidClaimProof();
+    error CodeAlreadyUsed();
+    error EndTimeBeforeStartTime();
+    error OnlyIssuanceOwner();
+    error InsufficientRemainingFunds();
+    error IssuanceAlreadyTerminated();
 
     struct VoucherIssuance {
         string issuanceId;
@@ -27,7 +41,7 @@ library VoucherSystem {
         uint256 endTime;
         bytes32 merkleRoot;
         bool isActive;
-        string ipfsCid;  // Optional IPFS CID for additional metadata
+        string ipfsCid;
     }
 
     struct VoucherStorage {
@@ -77,8 +91,8 @@ library VoucherSystem {
         internal
     {
         // endTime == 0 means unlimited duration, otherwise endTime must be after startTime
-        require(endTime == 0 || endTime > startTime, "End time should be after start time");
-        require(bytes(self.issuances[issuanceId].issuanceId).length == 0, "Issuance ID already exists");
+        if (endTime != 0 && endTime <= startTime) revert EndTimeBeforeStartTime();
+        if (bytes(self.issuances[issuanceId].issuanceId).length != 0) revert IssuanceAlreadyExists();
 
         VoucherIssuance storage issuance = self.issuances[issuanceId];
         issuance.issuanceId = issuanceId;
@@ -123,41 +137,31 @@ library VoucherSystem {
         returns (uint256)
     {
         VoucherIssuance memory issuance = self.issuances[issuanceId];
-        require(bytes(issuance.issuanceId).length != 0, "Issuance not found");
-        require(issuance.isActive, "Issuance is not active");
-
-        // Check start time (0 means immediate start)
-        require(issuance.startTime == 0 || issuance.startTime < block.timestamp, "Issuance not started");
-
-        // Check end time (0 means unlimited duration)
-        require(issuance.endTime == 0 || block.timestamp < issuance.endTime, "Issuance already ended");
-
-        // Check claim count limit per user (0 means unlimited)
-        require(
-            issuance.countLimitPerUser == 0 || self.claimCountPerUser[issuanceId][claimer] < issuance.countLimitPerUser,
-            "Claim count reached limitation"
-        );
-        require(
-            self.remainingRawAmount[issuanceId] >= claimRawAmount,
-            "No more claimable amount"
-        );
-        if (issuance.totalAmountLimit > 0) {
-            require(
-                self.claimedDisplayAmount[issuanceId] + issuance.amountPerClaim <= issuance.totalAmountLimit,
-                "Total amount limit exceeded"
-            );
+        if (bytes(issuance.issuanceId).length == 0) revert IssuanceNotFound();
+        if (!issuance.isActive) revert IssuanceNotActive();
+        if (issuance.startTime != 0 && issuance.startTime >= block.timestamp) revert IssuanceNotStarted();
+        if (issuance.endTime != 0 && block.timestamp >= issuance.endTime) revert IssuanceAlreadyEnded();
+        if (issuance.countLimitPerUser != 0 && self.claimCountPerUser[issuanceId][claimer] >= issuance.countLimitPerUser) {
+            revert ClaimLimitReached();
         }
-        require(
-            MerkleProof.verify(proof, issuance.merkleRoot, keccak256(abi.encodePacked(code))),
-            "Invalid claim proof"
-        );
-        require(!self.isCodeUsed[issuanceId][code], "Code already used");
+        if (self.remainingRawAmount[issuanceId] < claimRawAmount) revert NoClaimableAmount();
+        if (issuance.totalAmountLimit > 0) {
+            if (self.claimedDisplayAmount[issuanceId] + issuance.amountPerClaim > issuance.totalAmountLimit) {
+                revert TotalAmountLimitExceeded();
+            }
+        }
+        if (!MerkleProof.verify(proof, issuance.merkleRoot, keccak256(abi.encodePacked(code)))) {
+            revert InvalidClaimProof();
+        }
+        if (self.isCodeUsed[issuanceId][code]) revert CodeAlreadyUsed();
 
         self.claimCountPerUser[issuanceId][claimer]++;
-        self.remainingRawAmount[issuanceId] -= claimRawAmount;
         self.claimedRawAmount[issuanceId] += claimRawAmount;
         self.claimedDisplayAmount[issuanceId] += issuance.amountPerClaim;
         self.totalClaimCount[issuanceId]++;
+        unchecked {
+            self.remainingRawAmount[issuanceId] -= claimRawAmount;
+        }
         self.isCodeUsed[issuanceId][code] = true;
 
         emit VoucherClaimed(issuanceId, claimer, code, issuance.amountPerClaim);
@@ -174,9 +178,9 @@ library VoucherSystem {
         internal
     {
         VoucherIssuance storage issuance = self.issuances[issuanceId];
-        require(bytes(issuance.issuanceId).length != 0, "Issuance not found");
-        require(issuance.owner == sender, "Only owner can add funds");
-        require(issuance.isActive, "Issuance is not active");
+        if (bytes(issuance.issuanceId).length == 0) revert IssuanceNotFound();
+        if (issuance.owner != sender) revert OnlyIssuanceOwner();
+        if (!issuance.isActive) revert IssuanceNotActive();
 
         self.remainingRawAmount[issuanceId] += rawAmount;
 
@@ -193,10 +197,9 @@ library VoucherSystem {
         returns (uint256)
     {
         VoucherIssuance storage issuance = self.issuances[issuanceId];
-        require(bytes(issuance.issuanceId).length != 0, "Issuance not found");
-        require(issuance.owner == sender, "Only owner can withdraw funds");
-
-        require(self.remainingRawAmount[issuanceId] >= rawAmount, "Insufficient remaining funds");
+        if (bytes(issuance.issuanceId).length == 0) revert IssuanceNotFound();
+        if (issuance.owner != sender) revert OnlyIssuanceOwner();
+        if (self.remainingRawAmount[issuanceId] < rawAmount) revert InsufficientRemainingFunds();
 
         self.remainingRawAmount[issuanceId] -= rawAmount;
 
@@ -214,9 +217,9 @@ library VoucherSystem {
         returns (uint256)
     {
         VoucherIssuance storage issuance = self.issuances[issuanceId];
-        require(bytes(issuance.issuanceId).length != 0, "Issuance not found");
-        require(issuance.owner == sender, "Only owner can terminate issuance");
-        require(issuance.isActive, "Issuance is already terminated");
+        if (bytes(issuance.issuanceId).length == 0) revert IssuanceNotFound();
+        if (issuance.owner != sender) revert OnlyIssuanceOwner();
+        if (!issuance.isActive) revert IssuanceAlreadyTerminated();
 
         issuance.isActive = false;
 
@@ -228,114 +231,4 @@ library VoucherSystem {
         return remainingRawAmount;
     }
 
-    function getFundsInfo(
-        VoucherStorage storage self,
-        string memory issuanceId
-    )
-        internal
-        view
-        returns (
-            uint256 remainingRawAmount,
-            uint256 claimedRawAmount,
-            uint256 claimedDisplayAmount,
-            uint256 totalClaimCount
-        )
-    {
-        VoucherIssuance memory issuance = self.issuances[issuanceId];
-        require(bytes(issuance.issuanceId).length != 0, "Issuance not found");
-
-        return (
-            self.remainingRawAmount[issuanceId],
-            self.claimedRawAmount[issuanceId],
-            self.claimedDisplayAmount[issuanceId],
-            self.totalClaimCount[issuanceId]
-        );
-    }
-
-    function getRemainingRawAmount(
-        VoucherStorage storage self,
-        string memory issuanceId
-    )
-        internal
-        view
-        returns (uint256)
-    {
-        VoucherIssuance memory issuance = self.issuances[issuanceId];
-        require(bytes(issuance.issuanceId).length != 0, "Issuance not found");
-
-        return self.remainingRawAmount[issuanceId];
-    }
-
-    function getIssuance(
-        VoucherStorage storage self,
-        string memory issuanceId
-    )
-        internal
-        view
-        returns (VoucherIssuance memory)
-    {
-        return self.issuances[issuanceId];
-    }
-
-    function getIssuanceIds(VoucherStorage storage self) internal view returns (string[] memory) {
-        return self.issuanceIds;
-    }
-
-    function canClaim(
-        VoucherStorage storage self,
-        string memory issuanceId,
-        string memory code,
-        bytes32[] calldata proof,
-        address claimer,
-        uint256 claimRawAmount
-    )
-        internal
-        view
-        returns (bool, uint8)
-    {
-        VoucherIssuance memory issuance = self.issuances[issuanceId];
-
-        if (bytes(issuance.issuanceId).length == 0) {
-            return (false, ERROR_ISSUANCE_NOT_FOUND);
-        }
-
-        if (!issuance.isActive) {
-            return (false, ERROR_ISSUANCE_NOT_ACTIVE);
-        }
-
-        // Check start time (0 means immediate start)
-        if (issuance.startTime != 0 && issuance.startTime >= block.timestamp) {
-            return (false, ERROR_NOT_STARTED);
-        }
-
-        // Check end time (0 means unlimited duration)
-        if (issuance.endTime != 0 && block.timestamp >= issuance.endTime) {
-            return (false, ERROR_ALREADY_ENDED);
-        }
-
-        // Check claim count limit per user (0 means unlimited)
-        if (issuance.countLimitPerUser != 0 && self.claimCountPerUser[issuanceId][claimer] >= issuance.countLimitPerUser) {
-            return (false, ERROR_CLAIM_LIMIT_REACHED);
-        }
-
-        if (self.remainingRawAmount[issuanceId] < claimRawAmount) {
-            return (false, ERROR_INSUFFICIENT_FUNDS);
-        }
-
-        if (issuance.totalAmountLimit > 0) {
-            if (self.claimedDisplayAmount[issuanceId] + issuance.amountPerClaim > issuance.totalAmountLimit) {
-                return (false, ERROR_MAX_TOTAL_EXCEEDED);
-            }
-        }
-
-        if (!MerkleProof.verify(proof, issuance.merkleRoot, keccak256(abi.encodePacked(code)))) {
-            return (false, ERROR_INVALID_PROOF);
-        }
-
-        if (self.isCodeUsed[issuanceId][code]) {
-            return (false, ERROR_CODE_ALREADY_USED);
-        }
-
-        return (true, ERROR_NONE);
-    }
 }
