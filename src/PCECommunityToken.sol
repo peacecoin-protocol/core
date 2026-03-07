@@ -175,7 +175,7 @@ contract PCECommunityToken is
         if (currentFactor < 1) {
             currentFactor = 1;
         }
-        return rawBalance / currentFactor;
+        return Math.mulDiv(rawBalance, currentFactor, initialFactor * initialFactor);
     }
 
     function displayBalanceToRawBalance(uint256 displayBalance) public view returns (uint256) {
@@ -183,7 +183,7 @@ contract PCECommunityToken is
         if (currentFactor < 1) {
             currentFactor = 1;
         }
-        return displayBalance * currentFactor;
+        return Math.mulDiv(displayBalance, initialFactor * initialFactor, currentFactor);
     }
 
     function totalSupply() public view override returns (uint256) {
