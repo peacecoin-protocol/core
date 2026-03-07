@@ -4,6 +4,18 @@ All notable changes to the PCEToken and PCECommunityToken contracts are document
 Version numbering was previously tracked via separate contract files (e.g., PCETokenV2.sol).
 As of v11, a single file per contract is used and versioning is managed through git history.
 
+## v12
+- Fix fee drain in `transferFromWithAuthorization` — include fee in allowance check and spend
+- Add zero-amount transfer guard to `transferWithAuthorization` and `transferFromWithAuthorization`
+- Replace `ecrecover` with `ECRecover.recover` in `transferFromWithAuthorization`, `setInfinityApproveFlagWithAuthorization`, and `claimVoucherWithAuthorization` (address(0) guard + signature malleability protection)
+- Add address(0) validation for all meta-transaction function parameters
+- Fix `_mintArigatoCreation` to use `storage` instead of `memory` for `AccountInfo`, enabling per-sender cumulative mint tracking
+- Rewrite `getCurrentFactor` with O(log n) binary exponentiation for correct multi-period decay (PCECommunityToken and PCEToken)
+- Fix `updateFactorIfNeeded` to advance `lastDecreaseTime` to decay boundary instead of `block.timestamp`
+- Replace `isWednesdayBetween` with `countWednesdaysBetween` for accurate multi-Wednesday counting in PCEToken
+- Fix `midnightTotalSupply` initialization to use `super.totalSupply()` instead of transfer amount
+- Add explicit underflow guard in `swapFromLocalToken` for deposited PCE token reserve
+
 ## v11
 - Add daily swap-to-PCE tracking to prevent limit bypass (global and individual)
 - Replace `burnFrom` with `burnByPCEToken` in `swapFromLocalToken` (no user approval needed)

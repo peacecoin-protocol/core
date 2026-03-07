@@ -133,12 +133,19 @@ contract PCETest is Test {
 
     function testBurnByPCETokenOnlyCallableByPCEToken() public {
         vm.startPrank(owner);
-        token.mint(owner, 100 ether);
+        pceToken.swapToLocalToken(address(token), 100 ether);
         vm.stopPrank();
 
         vm.startPrank(user1);
         vm.expectRevert("Only PCE token");
         token.burnByPCEToken(owner, 10 ether);
+        vm.stopPrank();
+    }
+
+    function testMintOnlyCallableByPCEToken() public {
+        vm.startPrank(owner);
+        vm.expectRevert("Only PCE token");
+        token.mint(owner, 100 ether);
         vm.stopPrank();
     }
 
@@ -269,7 +276,7 @@ contract PCETest is Test {
     }
 
     function testVersion() public view {
-        assertEq(pceToken.version(), "1.0.11");
-        assertEq(token.version(), "1.0.11");
+        assertEq(pceToken.version(), "1.0.12");
+        assertEq(token.version(), "1.0.12");
     }
 }

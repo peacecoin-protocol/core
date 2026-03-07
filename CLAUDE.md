@@ -39,7 +39,7 @@ git push origin v12
 
 - `src/PCEToken.sol` — Main PCE token (UUPS upgradeable proxy)
 - `src/PCECommunityToken.sol` — Community tokens (Beacon proxy, one per community)
-- `script/UpgradeDEV.s.sol` — DEV environment upgrade (Polygon Amoy)
+- `script/UpgradeDEV.s.sol` — DEV environment upgrade (Polygon mainnet)
 - `script/Upgrade.s.sol` — Production upgrade (Polygon mainnet)
 - `script/upgrade.sh` — Upgrade wrapper with storage layout validation
 
@@ -51,7 +51,7 @@ git push origin v12
 
 ## Contract Addresses
 
-### DEV (Polygon Amoy)
+### DEV (Polygon mainnet)
 - PCEToken proxy: `0x62Ef93EAa5bB3E47E0e855C323ef156c8E3D8913`
 - PCECommunityToken beacon: `0xA9D965660dcF0fA73E709fd802e9DEF2d9b52952`
 
