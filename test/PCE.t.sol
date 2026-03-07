@@ -135,21 +135,21 @@ contract PCETest is Test {
         vm.stopPrank();
 
         vm.startPrank(user1);
-        vm.expectRevert("Only PCE token");
+        vm.expectRevert(PCECommunityToken.OnlyPCEToken.selector);
         token.burnByPCEToken(owner, 10 ether);
         vm.stopPrank();
     }
 
     function testMintOnlyCallableByPCEToken() public {
         vm.startPrank(owner);
-        vm.expectRevert("Only PCE token");
+        vm.expectRevert(PCECommunityToken.OnlyPCEToken.selector);
         token.mint(owner, 100 ether);
         vm.stopPrank();
     }
 
     function testRecordSwapToPCEOnlyCallableByPCEToken() public {
         vm.startPrank(user1);
-        vm.expectRevert("Only PCE token");
+        vm.expectRevert(PCECommunityToken.OnlyPCEToken.selector);
         token.recordSwapToPCE(user1, 10 ether);
         vm.stopPrank();
     }
