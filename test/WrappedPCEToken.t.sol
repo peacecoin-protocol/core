@@ -1,11 +1,10 @@
 // SPDX-License-Identifier: MIT
-pragma solidity 0.8.26;
+pragma solidity 0.8.30;
 
 import { Test } from "forge-std/Test.sol";
 import { WrappedPCEToken } from "../src/WrappedPCEToken.sol";
 import { PeaceCoinTokenDev } from "../src/PeaceCoinTokenDev.sol";
 import { ERC1967Proxy } from "@openzeppelin/contracts/proxy/ERC1967/ERC1967Proxy.sol";
-import { IVotes } from "@openzeppelin/contracts/governance/utils/IVotes.sol";
 
 contract WrappedPCETokenTest is Test {
     WrappedPCEToken public implementation;
@@ -25,15 +24,15 @@ contract WrappedPCETokenTest is Test {
         implementation = new WrappedPCEToken();
 
         // Deploy WPCE proxy and initialize
-        bytes memory initDataWPCE = abi.encodeWithSelector(
+        bytes memory initDataWpce = abi.encodeWithSelector(
             WrappedPCEToken.initialize.selector,
             "Wrapped PeaceCoin Token",
             "WPCE",
             address(pceToken),
             owner
         );
-        ERC1967Proxy proxyWPCE = new ERC1967Proxy(address(implementation), initDataWPCE);
-        wpce = WrappedPCEToken(address(proxyWPCE));
+        ERC1967Proxy proxyWpce = new ERC1967Proxy(address(implementation), initDataWpce);
+        wpce = WrappedPCEToken(address(proxyWpce));
 
         // Mint some tokens for testing
         pceToken.mint(alice, 1000 ether);

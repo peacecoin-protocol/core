@@ -1,12 +1,10 @@
 // SPDX-License-Identifier: MIT
-pragma solidity 0.8.26;
+pragma solidity 0.8.30;
 
 import {Test, console2} from "forge-std/Test.sol";
 import {PCECommunityToken} from "../src/PCECommunityToken.sol";
 import {PCEToken} from "../src/PCEToken.sol";
 import {ExchangeAllowMethod} from "../src/lib/Enum.sol";
-import {Math} from "@openzeppelin/contracts/utils/math/Math.sol";
-import {Utils} from "../src/lib/Utils.sol";
 
 // Minimal Beacon for testing
 contract MinimalBeacon {

@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MIT
-pragma solidity 0.8.26;
+pragma solidity 0.8.30;
 
 import { ERC20Upgradeable } from "@openzeppelin/contracts-upgradeable/token/ERC20/ERC20Upgradeable.sol";
 import { ERC20BurnableUpgradeable } from
@@ -10,7 +10,6 @@ import { ERC20PermitUpgradeable } from "@openzeppelin/contracts-upgradeable/toke
 import { PCEToken } from "./PCEToken.sol";
 import { Utils } from "./lib/Utils.sol";
 import { EIP3009 } from "./lib/EIP3009.sol";
-import { EIP712 } from "./lib/EIP712.sol";
 import { ECRecover } from "./lib/ECRecover.sol";
 import { TokenSetting } from "./lib/TokenSetting.sol";
 import { ExchangeAllowMethod } from "./lib/Enum.sol";
@@ -201,7 +200,7 @@ contract PCECommunityToken is
         _afterTokenTransfer(from, to, value);
     }
 
-    function _beforeTokenTransfer(address from, address to, uint256 amount) internal {
+    function _beforeTokenTransfer(address from, address to, uint256) internal {
         if (midnightTotalSupplyModifiedTime == 0) {
             // Use total supply instead of transfer amount to prevent manipulation
             midnightTotalSupply = super.totalSupply();
