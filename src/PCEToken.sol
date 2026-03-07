@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MIT
-pragma solidity 0.8.26;
+pragma solidity 0.8.30;
 
 import { BeaconProxy } from "@openzeppelin/contracts/proxy/beacon/BeaconProxy.sol";
 import { UUPSUpgradeable } from "@openzeppelin/contracts/proxy/utils/UUPSUpgradeable.sol";
@@ -8,7 +8,6 @@ import { OwnableUpgradeable } from "@openzeppelin/contracts-upgradeable/access/O
 import { Initializable } from "@openzeppelin/contracts-upgradeable/proxy/utils/Initializable.sol";
 import { ERC20BurnableUpgradeable } from
     "@openzeppelin/contracts-upgradeable/token/ERC20/extensions/ERC20BurnableUpgradeable.sol";
-import { Clones } from "@openzeppelin/contracts/proxy/Clones.sol";
 import { PCECommunityToken } from "./PCECommunityToken.sol";
 import { Utils } from "./lib/Utils.sol";
 import { ExchangeAllowMethod } from "./lib/Enum.sol";
@@ -49,6 +48,7 @@ contract PCEToken is
     );
 
     uint256 public constant INITIAL_FACTOR = 10 ** 18;
+    uint256 private constant Q96 = 2 ** 96;
     // 998/1000 = 0.998 (represents a 0.2% decrease)
     uint256 public constant DECREASE_RATE = 998 * (10 ** 18);
     uint256 public constant DECREASE_RATE_BASE = 1000 * (10 ** 18);
@@ -220,8 +220,11 @@ contract PCEToken is
 
         PCECommunityToken target = PCECommunityToken(toToken);
 
-        return (((localTokens[toToken].exchangeRate << 96) / INITIAL_FACTOR) * target.getCurrentFactor())
-            / getCurrentFactor();
+        return Math.mulDiv(
+            localTokens[toToken].exchangeRate * Q96,
+            target.getCurrentFactor(),
+            INITIAL_FACTOR * getCurrentFactor()
+        );
     }
 
     function getSwapRateBetweenTokens(address fromToken, address toToken) public view returns (uint256) {

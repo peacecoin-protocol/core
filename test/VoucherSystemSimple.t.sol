@@ -1,11 +1,10 @@
 // SPDX-License-Identifier: MIT
-pragma solidity 0.8.26;
+pragma solidity 0.8.30;
 
-import { Test, console2 } from "forge-std/Test.sol";
+import { Test } from "forge-std/Test.sol";
 import { PCECommunityToken } from "../src/PCECommunityToken.sol";
 import { PCEToken } from "../src/PCEToken.sol";
 import { ExchangeAllowMethod } from "../src/lib/Enum.sol";
-import { BeaconProxy } from "@openzeppelin/contracts/proxy/beacon/BeaconProxy.sol";
 import { UpgradeableBeacon } from "@openzeppelin/contracts/proxy/beacon/UpgradeableBeacon.sol";
 
 contract VoucherSystemSimpleTest is Test {

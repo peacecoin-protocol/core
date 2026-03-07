@@ -4,7 +4,7 @@
   auto_detect_solc = false
   block_timestamp = 1_680_220_800 # March 31, 2023 at 00:00 GMT
   bytecode_hash = "none"
-  evm_version = "shanghai"
+  evm_version = "cancun"
   fuzz = { runs = 1_000 }
   gas_reports = ["*"]
   optimizer = true
@@ -12,7 +12,7 @@
   via_ir = true
   out = "out"
   script = "script"
-  solc = "0.8.26"
+  solc = "0.8.30"
   src = "src"
   test = "test"
   libs = ["node_modules", "lib"]
@@ -35,6 +35,16 @@
   optimism = { key = "${API_KEY_OPTIMISTIC_ETHERSCAN}" }
   polygon = { key = "${API_KEY_POLYGONSCAN}" }
   sepolia = { key = "${API_KEY_ETHERSCAN}" }
+
+[lint]
+  exclude_lints = [
+    "mixed-case-function",       # Deployed ABIs — cannot rename
+    "mixed-case-variable",       # Deployed storage variables — cannot rename
+    "asm-keccak256",             # EIP-712 signatures need abi.encodePacked + keccak256
+    "erc20-unchecked-transfer",  # Only triggers in test files (PCECommunityToken.transfer always returns true)
+    "pascal-case-struct",        # Legacy polygon lib
+    "unwrapped-modifier-logic",  # Legacy polygon lib
+  ]
 
 [fmt]
   bracket_spacing = true
