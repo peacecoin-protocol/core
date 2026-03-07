@@ -235,7 +235,7 @@ function demo() {
   const params: DepreciationParams = {
     lastDecreaseTime: startTime,
     decreaseIntervalDays: 7,
-    afterDecreaseBp: 10200, // factor *= 1.02 per period → ~2% display decrease
+    afterDecreaseBp: 9980, // factor *= 0.998 per period
     lastModifiedFactor: 10n ** 18n, // 1e18 initial factor
   };
 
@@ -246,21 +246,21 @@ function demo() {
       type: "mint",
       timestamp: startTime + 1 * day,
       displayAmount: 1000n,
-      rawAmount: 1000n * computeFactor(params.lastModifiedFactor, startTime, startTime + 1 * day, 7, 10200),
+      rawAmount: 1000n * computeFactor(params.lastModifiedFactor, startTime, startTime + 1 * day, 7, 9980),
       txHash: "0xaaa...111",
     },
     {
       type: "mint",
       timestamp: startTime + 10 * day,
       displayAmount: 500n,
-      rawAmount: 500n * computeFactor(params.lastModifiedFactor, startTime, startTime + 10 * day, 7, 10200),
+      rawAmount: 500n * computeFactor(params.lastModifiedFactor, startTime, startTime + 10 * day, 7, 9980),
       txHash: "0xbbb...222",
     },
     {
       type: "transfer_out",
       timestamp: startTime + 20 * day,
       displayAmount: 200n,
-      rawAmount: 200n * computeFactor(params.lastModifiedFactor, startTime, startTime + 20 * day, 7, 10200),
+      rawAmount: 200n * computeFactor(params.lastModifiedFactor, startTime, startTime + 20 * day, 7, 9980),
       txHash: "0xccc...333",
     },
   ];
