@@ -28,7 +28,7 @@ interface DepreciationParams {
   lastDecreaseTime: number;
   /** Contract storage: decreaseIntervalDays */
   decreaseIntervalDays: number;
-  /** Contract storage: afterDecreaseBp  (e.g. 9800 = 98%) */
+  /** Contract storage: afterDecreaseBp  (e.g. 10200 = factor grows 2% per period → display decreases) */
   afterDecreaseBp: number;
   /** Contract storage: lastModifiedFactor */
   lastModifiedFactor: bigint;
@@ -226,7 +226,8 @@ function buildHistory(
 // ---------- Demo ----------
 
 function demo() {
-  // Simulate contract params: 2% decay every 7 days
+  // Simulate contract params: ~2% depreciation every 7 days
+  // afterDecreaseBp > 10000 means factor INCREASES → display balance DECREASES
   const now = Math.floor(Date.now() / 1000);
   const day = 86400;
   const startTime = now - 30 * day; // 30 days ago
@@ -234,32 +235,32 @@ function demo() {
   const params: DepreciationParams = {
     lastDecreaseTime: startTime,
     decreaseIntervalDays: 7,
-    afterDecreaseBp: 9800, // 98% → 2% decay
+    afterDecreaseBp: 10200, // factor *= 1.02 per period → ~2% display decrease
     lastModifiedFactor: 10n ** 18n, // 1e18 initial factor
   };
 
   // Simulate some tx events
-  const factor = params.lastModifiedFactor;
+  // rawAmount = displayAmount * factor at the time of the tx
   const txEvents: TxEvent[] = [
     {
       type: "mint",
       timestamp: startTime + 1 * day,
       displayAmount: 1000n,
-      rawAmount: 1000n * factor,
+      rawAmount: 1000n * computeFactor(params.lastModifiedFactor, startTime, startTime + 1 * day, 7, 10200),
       txHash: "0xaaa...111",
     },
     {
       type: "mint",
       timestamp: startTime + 10 * day,
       displayAmount: 500n,
-      rawAmount: 500n * computeFactor(factor, startTime, startTime + 10 * day, 7, 9800),
+      rawAmount: 500n * computeFactor(params.lastModifiedFactor, startTime, startTime + 10 * day, 7, 10200),
       txHash: "0xbbb...222",
     },
     {
       type: "transfer_out",
       timestamp: startTime + 20 * day,
       displayAmount: 200n,
-      rawAmount: 200n * computeFactor(factor, startTime, startTime + 20 * day, 7, 9800),
+      rawAmount: 200n * computeFactor(params.lastModifiedFactor, startTime, startTime + 20 * day, 7, 10200),
       txHash: "0xccc...333",
     },
   ];
