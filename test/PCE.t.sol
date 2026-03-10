@@ -273,8 +273,83 @@ contract PCETest is Test {
         vm.stopPrank();
     }
 
+    function testCommunityTokenDepreciatesOverTime() public {
+        vm.startPrank(owner);
+
+        // Decrease interval is 1 day, afterDecreaseBp = 9800 (98%)
+        uint256 day1 = block.timestamp + 1 days;
+        uint256 day2 = block.timestamp + 2 days;
+
+        // Swap PCE to community token
+        pceToken.swapToLocalToken(address(token), 100 ether);
+        uint256 balanceAtSwap = token.balanceOf(owner);
+        assertTrue(balanceAtSwap > 0, "Should have community tokens after swap");
+
+        // Advance 1 day
+        vm.warp(day1);
+
+        uint256 balanceAfter1Day = token.balanceOf(owner);
+        assertLt(balanceAfter1Day, balanceAtSwap, "Display balance should DECREASE after 1 day (depreciation)");
+
+        // Advance 2 days from start
+        vm.warp(day2);
+
+        uint256 balanceAfter2Days = token.balanceOf(owner);
+        assertLt(balanceAfter2Days, balanceAfter1Day, "Display balance should continue decreasing");
+
+        // Verify the depreciation rate is approximately 2% per day
+        uint256 expectedAfter1Day = balanceAtSwap * 98 / 100;
+        assertApproxEqAbs(balanceAfter1Day, expectedAfter1Day, 1, "Should be ~98% after 1 day");
+
+        uint256 expectedAfter2Days = balanceAtSwap * 9604 / 10000;
+        assertApproxEqAbs(balanceAfter2Days, expectedAfter2Days, 1, "Should be ~96.04% after 2 days");
+
+        vm.stopPrank();
+    }
+
+    function testNewMintAfterDepreciationShowsCorrectBalance() public {
+        vm.startPrank(owner);
+
+        uint256 day1 = block.timestamp + 1 days;
+        uint256 day2 = block.timestamp + 2 days;
+
+        // First swap at day 0
+        pceToken.swapToLocalToken(address(token), 100 ether);
+        uint256 firstMintBalance = token.balanceOf(owner);
+
+        // Advance 1 day (factor depreciates by 2%)
+        vm.warp(day1);
+
+        uint256 depreciated = token.balanceOf(owner);
+        assertLt(depreciated, firstMintBalance, "First mint should have depreciated");
+
+        // Second swap at day 1 (same 100 PCE as first swap)
+        pceToken.swapToLocalToken(address(token), 100 ether);
+        uint256 totalAfterSecondMint = token.balanceOf(owner);
+        uint256 secondMintDelta = totalAfterSecondMint - depreciated;
+
+        // Verify second mint delta matches the full swap formula in swapToLocalToken:
+        // targetTokenAmount = amountToSwap * exchangeRate / INITIAL_FACTOR * communityFactor / pceFactor
+        uint256 exchangeRate = pceToken.getExchangeRate(address(token));
+        uint256 expectedSecondMint = 100 ether * exchangeRate / 1e18 * token.getCurrentFactor() / pceToken.getCurrentFactor();
+        assertApproxEqAbs(secondMintDelta, expectedSecondMint, 1, "Second mint should match swap formula at day 1");
+
+        // Advance 2 days from start - all tokens should depreciate
+        vm.warp(day2);
+        uint256 allDepreciated = token.balanceOf(owner);
+        assertLt(allDepreciated, totalAfterSecondMint, "All tokens should depreciate after another day");
+
+        // Verify combined depreciation:
+        // - First swap tokens (minted at day 0): depreciated 2 periods → 98% × 98% = 96.04%
+        // - Second swap tokens (minted at day 1): depreciated 1 period → 98%
+        uint256 expectedDay2 = depreciated * 98 / 100 + secondMintDelta * 98 / 100;
+        assertApproxEqAbs(allDepreciated, expectedDay2, 1, "Day 2 total should match combined depreciation");
+
+        vm.stopPrank();
+    }
+
     function testVersion() public view {
         assertEq(pceToken.version(), "1.0.12");
-        assertEq(token.version(), "1.0.12");
+        assertEq(token.version(), "1.0.13");
     }
 }
