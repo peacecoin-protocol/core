@@ -103,6 +103,7 @@ contract PCECommunityToken is
     event InfinityApproveFlagSet(address indexed owner, address indexed spender, bool flag);
 
     function initialize(string memory name, string memory symbol, uint256 _initialFactor) public initializer {
+        require(_initialFactor > 0, "Initial factor must be > 0");
         __ERC20_init(name, symbol);
         __Ownable_init(_msgSender());
         __ERC20Permit_init(name);
@@ -175,7 +176,7 @@ contract PCECommunityToken is
         if (currentFactor < 1) {
             currentFactor = 1;
         }
-        return rawBalance / currentFactor;
+        return Math.mulDiv(rawBalance, currentFactor, initialFactor * initialFactor);
     }
 
     function displayBalanceToRawBalance(uint256 displayBalance) public view returns (uint256) {
@@ -183,7 +184,7 @@ contract PCECommunityToken is
         if (currentFactor < 1) {
             currentFactor = 1;
         }
-        return displayBalance * currentFactor;
+        return Math.mulDiv(displayBalance, initialFactor * initialFactor, currentFactor);
     }
 
     function totalSupply() public view override returns (uint256) {
@@ -946,6 +947,6 @@ contract PCECommunityToken is
     }
 
     function version() public pure returns (string memory) {
-        return "1.0.12";
+        return "1.0.13";
     }
 }
