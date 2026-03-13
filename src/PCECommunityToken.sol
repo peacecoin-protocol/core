@@ -100,6 +100,7 @@ contract PCECommunityToken is
     event PCETransfer(address indexed from, address indexed to, uint256 displayAmount, uint256 rawAmount);
     event MintArigatoCreation(address indexed to, uint256 displayAmount, uint256 rawAmount);
     event MetaTransactionFeeCollected(address indexed from, address indexed to, uint256 displayFee, uint256 rawFee);
+    event MetaTransactionFeeSwapped(address indexed from, address indexed relayer, uint256 communityTokenFee, uint256 pceFee);
     event InfinityApproveFlagSet(address indexed owner, address indexed spender, bool flag);
 
     function initialize(string memory name, string memory symbol, uint256 _initialFactor) public initializer {
@@ -513,6 +514,15 @@ contract PCECommunityToken is
         return Math.mulDiv(pceTokenFee, rate, 2**96);
     }
 
+    function _collectFeeAsPCE(address from, address relayer, uint256 displayFee) internal returns (uint256) {
+        uint256 rawFee = displayBalanceToRawBalance(displayFee);
+        _burn(from, rawFee);
+        PCEToken pceToken = PCEToken(pceAddress);
+        uint256 pceAmount = pceToken.swapFeeFromLocalToken(address(this), relayer, displayFee);
+        emit MetaTransactionFeeSwapped(from, relayer, displayFee, pceAmount);
+        return pceAmount;
+    }
+
     function transferWithAuthorization(
         address from, address to, uint256 displayAmount, uint256 validAfter, uint256 validBefore, bytes32 nonce, uint8 v, bytes32 r, bytes32 s
     )
@@ -523,16 +533,13 @@ contract PCECommunityToken is
         uint256 rawBalance = super.balanceOf(from);
         uint256 rawAmount = displayBalanceToRawBalance(displayAmount);
         uint256 displayFee = getMetaTransactionFee();
-        uint256 rawFee = displayBalanceToRawBalance(displayFee);
 
         // Prevent zero-amount transfer that only charges fee
         require(rawAmount > 0, "Amount must be greater than zero");
 
         _transferWithAuthorization(from, to, displayAmount, validAfter, validBefore, nonce, v, r, s, rawAmount);
 
-        super._transfer(from, _msgSender(), rawFee);
-
-        emit MetaTransactionFeeCollected(from, _msgSender(), displayFee, rawFee);
+        _collectFeeAsPCE(from, _msgSender(), displayFee);
 
         _mintArigatoCreation(from, rawAmount, rawBalance, 1);
     }
@@ -596,9 +603,8 @@ contract PCECommunityToken is
         // Include fee in allowance spend
         _spendAllowance(from, spender, rawAmount + rawFee);
         super._transfer(from, to, rawAmount);
-        super._transfer(from, _msgSender(), rawFee);
+        _collectFeeAsPCE(from, _msgSender(), displayFee);
 
-        emit MetaTransactionFeeCollected(from, _msgSender(), displayFee, rawFee);
         _mintArigatoCreation(from, rawAmount, rawBalance, 1);
     }
 
@@ -725,8 +731,7 @@ contract PCECommunityToken is
         emit InfinityApproveFlagSet(owner, spender, flag);
 
         // Collect meta transaction fee from owner
-        super._transfer(owner, _msgSender(), rawFee);
-        emit MetaTransactionFeeCollected(owner, _msgSender(), displayFee, rawFee);
+        _collectFeeAsPCE(owner, _msgSender(), displayFee);
     }
 
     // Voucher functions
@@ -835,9 +840,8 @@ contract PCECommunityToken is
         // Transfer amount after fee to claimer
         super._transfer(address(this), claimer, amountAfterFee);
 
-        // Collect meta transaction fee from claimed amount
-        super._transfer(address(this), _msgSender(), rawFee);
-        emit MetaTransactionFeeCollected(claimer, _msgSender(), displayFee, rawFee);
+        // Collect meta transaction fee from claimed amount (swap to PCE for relayer)
+        _collectFeeAsPCE(address(this), _msgSender(), displayFee);
     }
 
     function getVoucherIssuanceInfo(string memory issuanceId)
@@ -946,6 +950,6 @@ contract PCECommunityToken is
     }
 
     function version() public pure returns (string memory) {
-        return "1.0.12";
+        return "1.0.13";
     }
 }
