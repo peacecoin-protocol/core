@@ -384,9 +384,47 @@ contract PCEToken is
         _burn(_msgSender(), amount);
     }
 
+    function addCapital(address communityToken, uint256 pceAmount, address _treasuryWallet) external {
+        require(msg.sender == communityToken, "Only community token");
+        require(localTokens[communityToken].isExists, "Token not found");
+        require(pceAmount > 0, "Amount must be > 0");
+
+        uint256 oldDeposited = localTokens[communityToken].depositedPCEToken;
+        uint256 oldRate = localTokens[communityToken].exchangeRate;
+
+        // Transfer PCE from treasury wallet to this contract
+        _transfer(_treasuryWallet, address(this), pceAmount);
+
+        // Update deposited amount
+        localTokens[communityToken].depositedPCEToken = oldDeposited + pceAmount;
+
+        // Adjust exchange rate: newRate = oldRate * oldDeposited / (oldDeposited + pceAmount)
+        localTokens[communityToken].exchangeRate = Math.mulDiv(oldRate, oldDeposited, oldDeposited + pceAmount);
+    }
+
+    function removeCapital(address communityToken, uint256 pceAmount, address _treasuryWallet) external {
+        require(msg.sender == communityToken, "Only community token");
+        require(localTokens[communityToken].isExists, "Token not found");
+        require(pceAmount > 0, "Amount must be > 0");
+
+        uint256 oldDeposited = localTokens[communityToken].depositedPCEToken;
+        require(pceAmount < oldDeposited, "Cannot withdraw full deposit");
+
+        uint256 oldRate = localTokens[communityToken].exchangeRate;
+
+        // Adjust exchange rate: newRate = oldRate * oldDeposited / (oldDeposited - pceAmount)
+        localTokens[communityToken].exchangeRate = Math.mulDiv(oldRate, oldDeposited, oldDeposited - pceAmount);
+
+        // Update deposited amount
+        localTokens[communityToken].depositedPCEToken = oldDeposited - pceAmount;
+
+        // Transfer PCE from this contract to treasury wallet
+        _transfer(address(this), _treasuryWallet, pceAmount);
+    }
+
     function _authorizeUpgrade(address newImplementation) internal virtual override onlyOwner { }
 
     function version() public pure returns (string memory) {
-        return "1.0.12";
+        return "1.0.13";
     }
 }
