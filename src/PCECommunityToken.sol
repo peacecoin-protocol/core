@@ -97,10 +97,20 @@ contract PCECommunityToken is
     mapping(address => uint256) public swappedToPCETodayByAddress;
     mapping(address => uint256) public swappedToPCETodayByAddressModifiedTime;
 
+    // --- V13: Treasury wallet and capital operations (PIP-2) ---
+    address public treasuryWallet;
+    bytes32 public constant TREASURY_MANAGER_ROLE = keccak256("TREASURY_MANAGER_ROLE");
+    mapping(bytes32 => mapping(address => bool)) private _roles;
+
     event PCETransfer(address indexed from, address indexed to, uint256 displayAmount, uint256 rawAmount);
     event MintArigatoCreation(address indexed to, uint256 displayAmount, uint256 rawAmount);
     event MetaTransactionFeeCollected(address indexed from, address indexed to, uint256 displayFee, uint256 rawFee);
     event InfinityApproveFlagSet(address indexed owner, address indexed spender, bool flag);
+    event TreasuryWalletSet(address indexed wallet);
+    event CapitalIncreased(uint256 pceAmount, uint256 oldExchangeRate, uint256 newExchangeRate);
+    event CapitalDecreased(uint256 pceAmount, uint256 oldExchangeRate, uint256 newExchangeRate);
+    event TreasuryManagerRoleGranted(address indexed account);
+    event TreasuryManagerRoleRevoked(address indexed account);
 
     function initialize(string memory name, string memory symbol, uint256 _initialFactor) public initializer {
         __ERC20_init(name, symbol);
@@ -945,7 +955,63 @@ contract PCECommunityToken is
         );
     }
 
+    // --- V13: Treasury wallet and capital operations (PIP-2) ---
+
+    modifier onlyTreasuryManager() {
+        require(_roles[TREASURY_MANAGER_ROLE][_msgSender()], "Not treasury manager");
+        _;
+    }
+
+    function hasRole(bytes32 role, address account) public view returns (bool) {
+        return _roles[role][account];
+    }
+
+    function initializeTreasury(address wallet) external onlyOwner {
+        require(treasuryWallet == address(0), "Already initialized");
+        require(wallet != address(0), "Invalid wallet address");
+        treasuryWallet = wallet;
+        _roles[TREASURY_MANAGER_ROLE][_msgSender()] = true;
+        emit TreasuryWalletSet(wallet);
+        emit TreasuryManagerRoleGranted(_msgSender());
+    }
+
+    function setTreasuryWallet(address wallet) external onlyTreasuryManager {
+        require(wallet != address(0), "Invalid wallet address");
+        treasuryWallet = wallet;
+        emit TreasuryWalletSet(wallet);
+    }
+
+    function capitalIncrease(uint256 pceAmount) external onlyTreasuryManager {
+        require(pceAmount > 0, "Amount must be > 0");
+        PCEToken pceToken = PCEToken(pceAddress);
+        uint256 oldExchangeRate = pceToken.getExchangeRate(address(this));
+        pceToken.addCapital(address(this), pceAmount, treasuryWallet);
+        uint256 newExchangeRate = pceToken.getExchangeRate(address(this));
+        emit CapitalIncreased(pceAmount, oldExchangeRate, newExchangeRate);
+    }
+
+    function capitalDecrease(uint256 pceAmount) external onlyTreasuryManager {
+        require(pceAmount > 0, "Amount must be > 0");
+        PCEToken pceToken = PCEToken(pceAddress);
+        uint256 oldExchangeRate = pceToken.getExchangeRate(address(this));
+        pceToken.removeCapital(address(this), pceAmount, treasuryWallet);
+        uint256 newExchangeRate = pceToken.getExchangeRate(address(this));
+        emit CapitalDecreased(pceAmount, oldExchangeRate, newExchangeRate);
+    }
+
+    function grantTreasuryManagerRole(address account) external onlyTreasuryManager {
+        require(account != address(0), "Invalid account address");
+        _roles[TREASURY_MANAGER_ROLE][account] = true;
+        emit TreasuryManagerRoleGranted(account);
+    }
+
+    function revokeTreasuryManagerRole(address account) external onlyTreasuryManager {
+        require(account != address(0), "Invalid account address");
+        _roles[TREASURY_MANAGER_ROLE][account] = false;
+        emit TreasuryManagerRoleRevoked(account);
+    }
+
     function version() public pure returns (string memory) {
-        return "1.0.12";
+        return "1.0.13";
     }
 }
