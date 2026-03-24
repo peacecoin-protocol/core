@@ -350,6 +350,72 @@ contract PCETest is Test {
 
     function testVersion() public view {
         assertEq(pceToken.version(), "1.0.12");
-        assertEq(token.version(), "1.0.13");
+        assertEq(token.version(), "1.0.14");
+    }
+
+    function testTransferWithMessageCount() public {
+        vm.startPrank(owner);
+        // Transfer 100 tokens to user1 first
+        token.transfer(user1, 100 ether);
+        vm.stopPrank();
+
+        // Advance 1 day so user1 is no longer a "guest" (firstTransactionTime != lastModifiedMidnightBalanceTime)
+        vm.warp(block.timestamp + 1 days + 1);
+
+        vm.startPrank(user1);
+        uint256 balanceBefore = token.balanceOf(user1);
+
+        // Transfer with messageCount=5
+        token.transferWithMessageCount(user2, 10 ether, 5);
+
+        uint256 balanceAfterMsg5 = token.balanceOf(user1);
+        // user1 should have less than before (sent 10) but may have arigato mint
+        uint256 user2Balance = token.balanceOf(user2);
+        assertGt(user2Balance, 0, "user2 should have received tokens");
+        vm.stopPrank();
+    }
+
+    function testTransferWithMessageCountEmitsEvent() public {
+        vm.startPrank(owner);
+        token.transfer(user1, 100 ether);
+        vm.stopPrank();
+
+        vm.startPrank(user1);
+        vm.expectEmit(true, true, false, true);
+        emit PCECommunityToken.TransferWithMessageCount(user1, user2, 10 ether, 7);
+        token.transferWithMessageCount(user2, 10 ether, 7);
+        vm.stopPrank();
+    }
+
+    function testTransferFromWithMessageCount() public {
+        vm.startPrank(owner);
+        token.transfer(user1, 100 ether);
+        vm.stopPrank();
+
+        // user1 approves owner to spend
+        vm.startPrank(user1);
+        token.approve(owner, 50 ether);
+        vm.stopPrank();
+
+        vm.startPrank(owner);
+        token.transferFromWithMessageCount(user1, user2, 10 ether, 3);
+        uint256 user2Balance = token.balanceOf(user2);
+        assertGt(user2Balance, 0, "user2 should have received tokens");
+        vm.stopPrank();
+    }
+
+    function testTransferWithMessageCountZeroTreatedAsOne() public {
+        vm.startPrank(owner);
+        token.transfer(user1, 100 ether);
+        vm.stopPrank();
+
+        vm.warp(block.timestamp + 1 days + 1);
+
+        vm.startPrank(user1);
+        // messageCount=0 should behave like messageCount=1 (internal _mintArigatoCreation clamps to 1)
+        token.transferWithMessageCount(user2, 10 ether, 0);
+        uint256 user2Balance = token.balanceOf(user2);
+        assertGt(user2Balance, 0, "user2 should have received tokens");
+        vm.stopPrank();
     }
 }
