@@ -54,18 +54,26 @@ git push origin v12
 ### DEV (Polygon mainnet)
 - PCEToken proxy: `0x62Ef93EAa5bB3E47E0e855C323ef156c8E3D8913`
 - PCECommunityToken beacon: `0xA9D965660dcF0fA73E709fd802e9DEF2d9b52952`
-- GovernanceReceiver: `0x36C4e7614Cb30a7FFEA6D03d2d3430B784DF1b8D`
-- Polygon Timelock: `0xd9c349725412119E7acae54398DFF839BC59583E`
+- GovernanceReceiver: `0xD71520d5eB2bCA76e7C2A155Bc623E0dBf6344D9`
+- Polygon Timelock: `0x676d0D36185E39b7072a4BAf6d48839443fdc984`
 
 ### DEV (Ethereum mainnet)
 - Governor: `0x00831a36ce3535EFFeFe54BaD0bb8dE27687a237`
 - WPCE (voting token): `0xeB5e0632eD3C635E0fa07420A328b49a7D0E6e6d`
 - Ethereum Timelock: `0x208983f723245C765b4F9E57FAaB2633c9DDaC6B`
-- GovernanceSender: `0xE86F98715D41A2E68a7FE279237130987dFbF2CF`
+- GovernanceSender: `0x68462250f3375Bbd33CAa6d319e20914e79158A1`
 
 ### Production (Polygon mainnet)
 - PCEToken proxy: `0xA4807a8C34353A5EA51aF073175950Cb6248dA7E`
 - PCECommunityToken beacon: `0x6A73A610707C113F34D8B82498b6868e5f7FAA74`
+- GovernanceReceiver: `0x1ea9944aB101e6C5D15896c4012e2bc89B856578`
+- Polygon Timelock: `0x8B62168e92E47AACfD5ae01b2f29cf9EFDBdA3E7`
+
+### Production (Ethereum mainnet)
+- Governor: `0x00831a36ce3535EFFeFe54BaD0bb8dE27687a237`
+- WPCE (voting token): `0xeB5e0632eD3C635E0fa07420A328b49a7D0E6e6d`
+- Ethereum Timelock: `0x208983f723245C765b4F9E57FAaB2633c9DDaC6B`
+- GovernanceSender: `0xA197c53c9658C21d4246De66f38012536028B2FB`
 
 ### GovTest (short-lived test governance)
 - Deploy scripts: `script/DeployGovTestPolygon.s.sol`, `script/DeployGovTestEthereum.s.sol`
