@@ -1,25 +1,58 @@
 // SPDX-License-Identifier: MIT
 pragma solidity 0.8.30;
 
-import {ExecutorReceive, InvalidPeer} from "wormhole-solidity-sdk/Executor/Integration.sol";
-import {SequenceReplayProtectionLib} from "wormhole-solidity-sdk/libraries/ReplayProtection.sol";
 import {Ownable} from "@openzeppelin/contracts/access/Ownable.sol";
 import {TimelockController} from "@openzeppelin/contracts/governance/TimelockController.sol";
-import {CHAIN_ID_ETHEREUM} from "wormhole-solidity-sdk/constants/Chains.sol";
+
+interface IWormholeReceiver {
+    struct Signature {
+        bytes32 r;
+        bytes32 s;
+        uint8 v;
+        uint8 guardianIndex;
+    }
+
+    struct VM {
+        uint8 version;
+        uint32 timestamp;
+        uint32 nonce;
+        uint16 emitterChainId;
+        bytes32 emitterAddress;
+        uint64 sequence;
+        uint8 consistencyLevel;
+        bytes payload;
+        uint32 guardianSetIndex;
+        Signature[] signatures;
+        bytes32 hash;
+    }
+
+    function parseAndVerifyVM(bytes calldata encodedVM)
+        external view returns (VM memory vm, bool valid, string memory reason);
+}
 
 /**
  * @title GovernanceReceiver
- * @notice Polygon-side contract that receives governance proposals from Ethereum via Wormhole Executor
- * @dev Receives cross-chain VAAs from GovernanceSender and schedules them on a
- *      local TimelockController for delayed execution.
+ * @notice Polygon-side contract that receives governance proposals from Ethereum via Wormhole VAAs
+ * @dev Receives Wormhole VAAs published by GovernanceSender, verifies Guardian signatures,
+ *      and schedules operations on a local TimelockController for delayed execution.
+ *      Anyone can relay the VAA — this is a permissionless relay model.
  *
- * Flow: GovernanceSender (Ethereum) → Wormhole Executor → GovernanceReceiver → Polygon Timelock → PCEToken
+ * Flow: GovernanceSender (Ethereum) → Wormhole Core Bridge → VAA
+ *       → anyone relays → GovernanceReceiver.receiveMessage(vaa)
+ *       → Polygon Timelock → PCEToken
  */
-contract GovernanceReceiver is ExecutorReceive, Ownable {
-    using SequenceReplayProtectionLib for *;
-
+contract GovernanceReceiver is Ownable {
     /// @notice Wormhole chain ID for Ethereum
-    uint16 public constant SOURCE_CHAIN = CHAIN_ID_ETHEREUM;
+    uint16 public constant SOURCE_CHAIN = 2;
+
+    /// @notice Wormhole chain ID for Polygon (destination)
+    uint16 public constant DESTINATION_CHAIN = 5;
+
+    /// @notice VAA validity period (2 days, matching Uniswap's approach)
+    uint256 public constant MESSAGE_TIMEOUT = 2 days;
+
+    /// @notice Wormhole Core Bridge on Polygon
+    IWormholeReceiver public immutable WORMHOLE;
 
     /// @notice Polygon TimelockController for delayed execution
     TimelockController public immutable TIMELOCK;
@@ -27,8 +60,11 @@ contract GovernanceReceiver is ExecutorReceive, Ownable {
     /// @notice Address of GovernanceSender on Ethereum (bytes32, left-padded)
     bytes32 public governanceSender;
 
-    /// @notice Emergency guardian that can cancel scheduled operations without timelock delay
+    /// @notice Emergency guardian for fast cancellation
     address public emergencyGuardian;
+
+    /// @notice Next minimum sequence number (monotonically increasing, replay protection)
+    uint64 public nextMinimumSequence;
 
     event CrossChainGovernanceReceived(
         uint64 indexed sequence,
@@ -39,85 +75,86 @@ contract GovernanceReceiver is ExecutorReceive, Ownable {
     event GovernanceSenderUpdated(bytes32 indexed oldSender, bytes32 indexed newSender);
     event EmergencyGuardianUpdated(address indexed oldGuardian, address indexed newGuardian);
 
-    error InvalidSender();
+    error InvalidWormhole();
     error InvalidTimelock();
-    error NotOwnerOrGuardian();
+    error InvalidSender();
     error GovernanceSenderNotSet();
+    error InvalidVAA(string reason);
+    error InvalidEmitterChain(uint16 chainId);
+    error InvalidEmitterAddress(bytes32 emitterAddress);
+    error InvalidSequence(uint64 sequence, uint64 minimum);
+    error MessageExpired(uint32 timestamp);
+    error InvalidDestination();
+    error NotOwnerOrGuardian();
     error WithdrawFailed();
 
     /**
-     * @param _coreBridge Address of the Wormhole Core Bridge on Polygon
+     * @param _wormhole Address of the Wormhole Core Bridge on Polygon
      * @param _timelock Address of the Polygon TimelockController
      * @param _owner Initial owner (deployer)
      */
     constructor(
-        address _coreBridge,
+        address _wormhole,
         address _timelock,
         address _owner
-    ) ExecutorReceive(_coreBridge) Ownable(_owner) {
+    ) Ownable(_owner) {
+        if (_wormhole == address(0) || _wormhole.code.length == 0) revert InvalidWormhole();
         if (_timelock == address(0) || _timelock.code.length == 0) revert InvalidTimelock();
+
+        WORMHOLE = IWormholeReceiver(_wormhole);
         TIMELOCK = TimelockController(payable(_timelock));
     }
 
-    /// @dev Required by ExecutorSharedBase — returns peer address for source chain
-    function _getPeer(uint16 chainId) internal view override returns (bytes32) {
-        if (chainId == SOURCE_CHAIN) return governanceSender;
-        return bytes32(0);
-    }
-
-    /// @dev Override to check governanceSender is set and source chain is Ethereum
-    function _checkPeer(uint16 chainId, bytes32 peerAddress) internal view override {
-        if (governanceSender == bytes32(0)) revert GovernanceSenderNotSet();
-        if (chainId != SOURCE_CHAIN) revert InvalidPeer();
-        if (governanceSender != peerAddress) revert InvalidPeer();
-    }
-
-    /// @dev Replay protection using Wormhole SDK's sequence-based protection
-    function _replayProtect(
-        uint16 emitterChainId,
-        bytes32 emitterAddress,
-        uint64 sequence,
-        bytes calldata /* encodedVaa */
-    ) internal override {
-        SequenceReplayProtectionLib.replayProtect(emitterChainId, emitterAddress, sequence);
-    }
-
-    // Use default msg.value == 0 check (no override needed)
-
     /**
-     * @dev Process the received VAA payload — decode and schedule on Polygon Timelock
+     * @notice Receive and process a Wormhole VAA containing a governance proposal
+     * @dev Anyone can call this — the VAA's Guardian signatures guarantee authenticity.
+     *      Sequence numbers must be monotonically increasing (replay protection).
+     * @param whMessage The encoded Wormhole VAA
      */
-    function _executeVaa(
-        bytes calldata payload,
-        uint32, /* timestamp */
-        uint16, /* peerChain */
-        bytes32, /* peerAddress */
-        uint64 sequence,
-        uint8 /* consistencyLevel */
-    ) internal override {
+    function receiveMessage(bytes calldata whMessage) external {
+        // Verify VAA via Wormhole Core Bridge (checks Guardian signatures)
+        (IWormholeReceiver.VM memory vm, bool valid, string memory reason) = WORMHOLE.parseAndVerifyVM(whMessage);
+        if (!valid) revert InvalidVAA(reason);
+
+        // Verify GovernanceSender is configured
+        if (governanceSender == bytes32(0)) revert GovernanceSenderNotSet();
+
+        // Verify emitter is GovernanceSender on Ethereum
+        if (vm.emitterChainId != SOURCE_CHAIN) revert InvalidEmitterChain(vm.emitterChainId);
+        if (vm.emitterAddress != governanceSender) revert InvalidEmitterAddress(vm.emitterAddress);
+
+        // Sequence must be monotonically increasing (replay protection)
+        if (vm.sequence < nextMinimumSequence) revert InvalidSequence(vm.sequence, nextMinimumSequence);
+        nextMinimumSequence = vm.sequence + 1;
+
+        // Check message is still valid (within timeout)
+        if (vm.timestamp + MESSAGE_TIMEOUT < block.timestamp) revert MessageExpired(vm.timestamp);
+
         // Decode payload
         (
             address[] memory targets,
             uint256[] memory values,
             bytes[] memory calldatas,
-            bytes32 salt
-        ) = abi.decode(payload, (address[], uint256[], bytes[], bytes32));
+            bytes32 salt,
+            address messageReceiver,
+            uint16 receiverChainId
+        ) = abi.decode(vm.payload, (address[], uint256[], bytes[], bytes32, address, uint16));
+
+        // Verify this message is for this contract on this chain
+        if (messageReceiver != address(this) || receiverChainId != DESTINATION_CHAIN) revert InvalidDestination();
 
         // Schedule on Polygon Timelock
         uint256 minDelay = TIMELOCK.getMinDelay();
         TIMELOCK.scheduleBatch(targets, values, calldatas, bytes32(0), salt, minDelay);
 
-        emit CrossChainGovernanceReceived(sequence, targets, values, salt);
+        emit CrossChainGovernanceReceived(vm.sequence, targets, values, salt);
     }
 
     /**
      * @notice Cancel a scheduled batch operation on the Polygon Timelock
      * @dev Callable by owner or emergencyGuardian.
-     *      If ownership is still held by an EOA or multisig, the owner path can cancel immediately.
-     *      After ownership is transferred to the Polygon Timelock, calls through the owner path are
-     *      themselves timelock-controlled and therefore are not a fast-cancel mechanism; in that
-     *      deployment model, only emergencyGuardian provides immediate cancellation.
-     *      Requires this contract to have CANCELLER_ROLE on the Timelock.
+     *      After ownership is transferred to the Polygon Timelock, only emergencyGuardian
+     *      provides immediate cancellation.
      * @param id The operation identifier (from hashOperationBatch)
      */
     function cancelScheduledBatch(bytes32 id) external {
@@ -129,7 +166,7 @@ contract GovernanceReceiver is ExecutorReceive, Ownable {
 
     /**
      * @notice Set the GovernanceSender address on Ethereum
-     * @param _governanceSender Address of the GovernanceSender contract (bytes32, left-padded)
+     * @param _governanceSender Address in Wormhole format (bytes32, 12 zero bytes + 20-byte address)
      */
     function setGovernanceSender(bytes32 _governanceSender) external onlyOwner {
         if (_governanceSender == bytes32(0)) revert InvalidSender();
@@ -139,8 +176,8 @@ contract GovernanceReceiver is ExecutorReceive, Ownable {
     }
 
     /**
-     * @notice Set or remove the emergency guardian address for fast cancellation
-     * @param _guardian Address of the emergency guardian (e.g., multisig), or address(0) to disable
+     * @notice Set or remove the emergency guardian
+     * @param _guardian Address of the emergency guardian, or address(0) to disable
      */
     function setEmergencyGuardian(address _guardian) external onlyOwner {
         address old = emergencyGuardian;
@@ -150,8 +187,6 @@ contract GovernanceReceiver is ExecutorReceive, Ownable {
 
     /**
      * @notice Withdraw ETH accidentally sent to this contract
-     * @param to Recipient address
-     * @param amount Amount of ETH to withdraw
      */
     function withdrawETH(address payable to, uint256 amount) external onlyOwner {
         if (to == address(0)) revert WithdrawFailed();
