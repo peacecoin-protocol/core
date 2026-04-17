@@ -384,9 +384,35 @@ contract PCEToken is
         _burn(_msgSender(), amount);
     }
 
+    function addReserve(address communityToken, uint256 pceAmount, address _treasuryWallet) external {
+        require(msg.sender == communityToken, "Only community token");
+        require(localTokens[communityToken].isExists, "Token not found");
+        require(pceAmount > 0, "Amount must be > 0");
+
+        uint256 oldDeposited = localTokens[communityToken].depositedPCEToken;
+        uint256 oldRate = localTokens[communityToken].exchangeRate;
+
+        // Transfer PCE from treasury wallet to this contract (requires prior approve)
+        _spendAllowance(_treasuryWallet, address(this), pceAmount);
+        _transfer(_treasuryWallet, address(this), pceAmount);
+
+        // Update deposited amount
+        localTokens[communityToken].depositedPCEToken = oldDeposited + pceAmount;
+
+        // Adjust exchange rate: newRate = oldRate * oldDeposited / (oldDeposited + pceAmount)
+        localTokens[communityToken].exchangeRate = Math.mulDiv(oldRate, oldDeposited, oldDeposited + pceAmount);
+    }
+
+    function adjustExchangeRate(address communityToken, uint256 newRate) external {
+        require(msg.sender == communityToken, "Only community token");
+        require(localTokens[communityToken].isExists, "Token not found");
+        require(newRate > 0, "Rate must be > 0");
+        localTokens[communityToken].exchangeRate = newRate;
+    }
+
     function _authorizeUpgrade(address newImplementation) internal virtual override onlyOwner { }
 
     function version() public pure returns (string memory) {
-        return "1.0.12";
+        return "1.0.13";
     }
 }

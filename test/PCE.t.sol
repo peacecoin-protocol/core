@@ -349,7 +349,283 @@ contract PCETest is Test {
     }
 
     function testVersion() public view {
-        assertEq(pceToken.version(), "1.0.12");
-        assertEq(token.version(), "1.0.13");
+        assertEq(pceToken.version(), "1.0.13");
+        assertEq(token.version(), "1.0.14");
+    }
+
+    // --- PIP-12: Treasury wallet and token value operations tests ---
+
+    function _setupTreasury() internal {
+        // Create a treasury wallet address
+        address treasury = address(0x1234);
+
+        // Owner initializes treasury on the community token
+        vm.startPrank(owner);
+        token.initializeTreasury(treasury);
+        vm.stopPrank();
+    }
+
+    function _setupTreasuryWithDeposit() internal returns (address treasury) {
+        treasury = address(0x1234);
+
+        vm.startPrank(owner);
+        token.initializeTreasury(treasury);
+
+        // Give treasury wallet some PCE tokens and approve PCEToken contract
+        pceToken.transfer(treasury, 200 ether);
+        vm.stopPrank();
+
+        vm.startPrank(treasury);
+        pceToken.approve(address(pceToken), type(uint256).max);
+        vm.stopPrank();
+    }
+
+    function testInitializeTreasury() public {
+        address treasury = address(0x1234);
+
+        vm.startPrank(owner);
+        token.initializeTreasury(treasury);
+        vm.stopPrank();
+
+        // Treasury wallet should be set
+        assertEq(token.treasuryWallet(), treasury, "Treasury wallet should be set");
+
+        // Owner should have RATE_MANAGER_ROLE
+        assertTrue(
+            token.hasRole(token.RATE_MANAGER_ROLE(), owner),
+            "Owner should have rate manager role"
+        );
+    }
+
+    function testInitializeTreasuryCannotBeCalledTwice() public {
+        address treasury = address(0x1234);
+
+        vm.startPrank(owner);
+        token.initializeTreasury(treasury);
+
+        vm.expectRevert("Already initialized");
+        token.initializeTreasury(address(0x5678));
+        vm.stopPrank();
+    }
+
+    function testIncreaseTokenValue() public {
+        address treasury = _setupTreasuryWithDeposit();
+
+        // Initial state: depositedPCEToken=1000e18 (from createToken), exchangeRate=1e18
+        uint256 depositedBefore = pceToken.getDepositedPCETokens(address(token));
+        uint256 rateBefore = pceToken.getExchangeRate(address(token));
+        assertEq(depositedBefore, 1000 ether, "Initial deposited should be 1000e18");
+        assertEq(rateBefore, 1 ether, "Initial exchange rate should be 1e18");
+
+        uint256 treasuryBalanceBefore = pceToken.balanceOf(treasury);
+        uint256 increaseAmount = 100 ether;
+
+        // Increase token value by 100e18 (treasury has 200 PCE)
+        vm.startPrank(owner);
+        token.increaseTokenValue(increaseAmount);
+        vm.stopPrank();
+
+        uint256 depositedAfter = pceToken.getDepositedPCETokens(address(token));
+        uint256 rateAfter = pceToken.getExchangeRate(address(token));
+        uint256 treasuryBalanceAfter = pceToken.balanceOf(treasury);
+
+        // depositedPCEToken should be 1100e18
+        assertEq(depositedAfter, depositedBefore + increaseAmount, "Deposited should increase");
+
+        // exchangeRate = 1e18 * 1000e18 / 1100e18
+        uint256 expectedRate = (rateBefore * depositedBefore) / (depositedBefore + increaseAmount);
+        assertEq(rateAfter, expectedRate, "Exchange rate should be adjusted downward");
+
+        // Treasury balance should decrease by increaseAmount
+        assertEq(
+            treasuryBalanceBefore - treasuryBalanceAfter,
+            increaseAmount,
+            "Treasury should have sent PCE"
+        );
+    }
+
+    function testIncreaseTokenValueWithSmallDeposit() public {
+        // Test with deposited=100e18, rate=1e18, increase=50e18
+
+        vm.startPrank(owner);
+
+        // Create a new community token with 100e18 deposit
+        address[] memory incomeTargetTokens = new address[](0);
+        address[] memory outgoTargetTokens = new address[](0);
+
+        pceToken.createToken(
+            "Small Community Token",
+            "SCT",
+            100 ether,
+            1 ether,
+            1, 9800, 1000, 500, 1000, 100,
+            ExchangeAllowMethod.All,
+            ExchangeAllowMethod.All,
+            incomeTargetTokens,
+            outgoTargetTokens
+        );
+
+        address[] memory tokens_ = pceToken.getTokens();
+        PCECommunityToken smallToken = PCECommunityToken(tokens_[tokens_.length - 1]);
+
+        // Set up treasury
+        address treasury = address(0x5678);
+        smallToken.initializeTreasury(treasury);
+
+        // Give treasury 50 PCE and approve
+        pceToken.transfer(treasury, 50 ether);
+        vm.stopPrank();
+
+        vm.startPrank(treasury);
+        pceToken.approve(address(pceToken), type(uint256).max);
+        vm.stopPrank();
+
+        // Verify initial state
+        assertEq(pceToken.getDepositedPCETokens(address(smallToken)), 100 ether);
+        assertEq(pceToken.getExchangeRate(address(smallToken)), 1 ether);
+
+        // Increase token value by 50e18
+        vm.startPrank(owner);
+        smallToken.increaseTokenValue(50 ether);
+        vm.stopPrank();
+
+        // depositedPCEToken = 150e18
+        assertEq(pceToken.getDepositedPCETokens(address(smallToken)), 150 ether);
+
+        // exchangeRate = 1e18 * 100e18 / 150e18 = 666666666666666666 (~0.667e18)
+        uint256 rateNum = 1 ether * 100 ether;
+        uint256 rateDen = 150 ether;
+        uint256 expectedRate = rateNum / rateDen;
+        assertEq(pceToken.getExchangeRate(address(smallToken)), expectedRate);
+    }
+
+    function testSplitToken() public {
+        // Test stock-split: totalSupply=100 tokens, mint 25 more → rebaseFactor increases
+        vm.startPrank(owner);
+
+        address[] memory incomeTargetTokens = new address[](0);
+        address[] memory outgoTargetTokens = new address[](0);
+
+        pceToken.createToken(
+            "Split Test Token",
+            "STT",
+            100 ether,
+            1 ether,
+            1, 9800, 1000, 500, 1000, 100,
+            ExchangeAllowMethod.All,
+            ExchangeAllowMethod.All,
+            incomeTargetTokens,
+            outgoTargetTokens
+        );
+
+        address[] memory tokens_ = pceToken.getTokens();
+        PCECommunityToken sToken = PCECommunityToken(tokens_[tokens_.length - 1]);
+
+        address treasury = address(0x9999);
+        sToken.initializeTreasury(treasury);
+
+        uint256 rateBefore = pceToken.getExchangeRate(address(sToken));
+        uint256 rebaseFactorBefore = sToken.rebaseFactor();
+        uint256 totalSupplyBefore = sToken.totalSupply();
+
+        // Split: mint 25 tokens worth
+        uint256 mintAmount = 25 ether;
+        sToken.splitToken(mintAmount);
+        vm.stopPrank();
+
+        uint256 rebaseFactorAfter = sToken.rebaseFactor();
+        uint256 rateAfter = pceToken.getExchangeRate(address(sToken));
+        uint256 totalSupplyAfter = sToken.totalSupply();
+
+        // rebaseFactor should increase: old * (total + mint) / total
+        uint256 expectedRebaseFactor = (rebaseFactorBefore * (totalSupplyBefore + mintAmount)) / totalSupplyBefore;
+        assertEq(rebaseFactorAfter, expectedRebaseFactor, "Rebase factor should increase proportionally");
+
+        // exchangeRate should increase: old * newRebase / oldRebase
+        uint256 expectedRate = (rateBefore * rebaseFactorAfter) / rebaseFactorBefore;
+        assertEq(rateAfter, expectedRate, "Exchange rate should adjust for split");
+
+        // Total supply should increase by mintAmount
+        assertEq(totalSupplyAfter, totalSupplyBefore + mintAmount, "Total supply should increase");
+    }
+
+    function testSplitTokenZeroAmountReverts() public {
+        _setupTreasury();
+
+        vm.startPrank(owner);
+        vm.expectRevert("Amount must be > 0");
+        token.splitToken(0);
+        vm.stopPrank();
+    }
+
+    function testUnauthorizedAccess() public {
+        _setupTreasury();
+
+        // user1 (not a rate manager) tries to call increaseTokenValue
+        vm.startPrank(user1);
+        vm.expectRevert("Not rate manager");
+        token.increaseTokenValue(10 ether);
+
+        vm.expectRevert("Not rate manager");
+        token.splitToken(10 ether);
+
+        vm.expectRevert("Not rate manager");
+        token.setTreasuryWallet(address(0x5555));
+
+        vm.expectRevert("Not rate manager");
+        token.grantRateManagerRole(user2);
+
+        vm.expectRevert("Not rate manager");
+        token.revokeRateManagerRole(owner);
+        vm.stopPrank();
+
+        // user1 tries to call initializeTreasury (not owner)
+        vm.startPrank(user1);
+        vm.expectRevert();
+        token.initializeTreasury(address(0x6666));
+        vm.stopPrank();
+    }
+
+    function testRoleManagement() public {
+        _setupTreasury();
+
+        // Owner has rate manager role after initializeTreasury
+        assertTrue(
+            token.hasRole(token.RATE_MANAGER_ROLE(), owner),
+            "Owner should have rate manager role"
+        );
+
+        // Owner grants role to user1
+        vm.startPrank(owner);
+        token.grantRateManagerRole(user1);
+        vm.stopPrank();
+
+        assertTrue(
+            token.hasRole(token.RATE_MANAGER_ROLE(), user1),
+            "User1 should have rate manager role"
+        );
+
+        // User1 can now revoke owner's role
+        vm.startPrank(user1);
+        token.revokeRateManagerRole(owner);
+        vm.stopPrank();
+
+        assertFalse(
+            token.hasRole(token.RATE_MANAGER_ROLE(), owner),
+            "Owner should no longer have rate manager role"
+        );
+
+        // Owner can no longer call rate manager functions
+        vm.startPrank(owner);
+        vm.expectRevert("Not rate manager");
+        token.increaseTokenValue(10 ether);
+        vm.stopPrank();
+
+        // User1 can still call rate manager functions (setTreasuryWallet)
+        vm.startPrank(user1);
+        token.setTreasuryWallet(address(0x7777));
+        vm.stopPrank();
+
+        assertEq(token.treasuryWallet(), address(0x7777), "Treasury wallet should be updated");
     }
 }

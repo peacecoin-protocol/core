@@ -97,10 +97,21 @@ contract PCECommunityToken is
     mapping(address => uint256) public swappedToPCETodayByAddress;
     mapping(address => uint256) public swappedToPCETodayByAddressModifiedTime;
 
+    // --- V14: Treasury wallet and token value operations (PIP-12) ---
+    address public treasuryWallet;
+    bytes32 public constant RATE_MANAGER_ROLE = keccak256("RATE_MANAGER_ROLE");
+    mapping(bytes32 => mapping(address => bool)) private _roles;
+    uint256 public rebaseFactor;
+
     event PCETransfer(address indexed from, address indexed to, uint256 displayAmount, uint256 rawAmount);
     event MintArigatoCreation(address indexed to, uint256 displayAmount, uint256 rawAmount);
     event MetaTransactionFeeCollected(address indexed from, address indexed to, uint256 displayFee, uint256 rawFee);
     event InfinityApproveFlagSet(address indexed owner, address indexed spender, bool flag);
+    event TreasuryWalletSet(address indexed wallet);
+    event TokenValueIncreased(uint256 pceAmount, uint256 oldExchangeRate, uint256 newExchangeRate);
+    event TokenSplit(uint256 mintAmount, uint256 oldExchangeRate, uint256 newExchangeRate, uint256 oldRebaseFactor, uint256 newRebaseFactor);
+    event RateManagerRoleGranted(address indexed account);
+    event RateManagerRoleRevoked(address indexed account);
 
     function initialize(string memory name, string memory symbol, uint256 _initialFactor) public initializer {
         require(_initialFactor > 0, "Initial factor must be > 0");
@@ -176,7 +187,11 @@ contract PCECommunityToken is
         if (currentFactor < 1) {
             currentFactor = 1;
         }
-        return Math.mulDiv(rawBalance, currentFactor, initialFactor * initialFactor);
+        uint256 base = Math.mulDiv(rawBalance, currentFactor, initialFactor * initialFactor);
+        if (rebaseFactor == 0 || rebaseFactor == INITIAL_FACTOR) {
+            return base;
+        }
+        return Math.mulDiv(base, rebaseFactor, INITIAL_FACTOR);
     }
 
     function displayBalanceToRawBalance(uint256 displayBalance) public view returns (uint256) {
@@ -184,7 +199,11 @@ contract PCECommunityToken is
         if (currentFactor < 1) {
             currentFactor = 1;
         }
-        return Math.mulDiv(displayBalance, initialFactor * initialFactor, currentFactor);
+        uint256 display = displayBalance;
+        if (rebaseFactor != 0 && rebaseFactor != INITIAL_FACTOR) {
+            display = Math.mulDiv(displayBalance, INITIAL_FACTOR, rebaseFactor);
+        }
+        return Math.mulDiv(display, initialFactor * initialFactor, currentFactor);
     }
 
     function totalSupply() public view override returns (uint256) {
@@ -946,7 +965,76 @@ contract PCECommunityToken is
         );
     }
 
+    // --- V14: Treasury wallet and token value operations (PIP-12) ---
+
+    modifier onlyRateManager() {
+        require(_roles[RATE_MANAGER_ROLE][_msgSender()], "Not rate manager");
+        _;
+    }
+
+    function hasRole(bytes32 role, address account) public view returns (bool) {
+        return _roles[role][account];
+    }
+
+    function initializeTreasury(address wallet) external onlyOwner {
+        require(treasuryWallet == address(0), "Already initialized");
+        require(wallet != address(0), "Invalid wallet address");
+        treasuryWallet = wallet;
+        rebaseFactor = INITIAL_FACTOR;
+        _roles[RATE_MANAGER_ROLE][_msgSender()] = true;
+        emit TreasuryWalletSet(wallet);
+        emit RateManagerRoleGranted(_msgSender());
+    }
+
+    function setTreasuryWallet(address wallet) external onlyRateManager {
+        require(wallet != address(0), "Invalid wallet address");
+        treasuryWallet = wallet;
+        emit TreasuryWalletSet(wallet);
+    }
+
+    function increaseTokenValue(uint256 pceAmount) external onlyRateManager {
+        require(pceAmount > 0, "Amount must be > 0");
+        PCEToken pceToken = PCEToken(pceAddress);
+        uint256 oldExchangeRate = pceToken.getExchangeRate(address(this));
+        pceToken.addReserve(address(this), pceAmount, treasuryWallet);
+        uint256 newExchangeRate = pceToken.getExchangeRate(address(this));
+        emit TokenValueIncreased(pceAmount, oldExchangeRate, newExchangeRate);
+    }
+
+    function splitToken(uint256 mintAmount) external onlyRateManager {
+        require(mintAmount > 0, "Amount must be > 0");
+
+        uint256 oldRebaseFactor = rebaseFactor;
+        uint256 currentTotalDisplay = totalSupply();
+        require(currentTotalDisplay > 0, "No supply to split");
+
+        PCEToken pceToken = PCEToken(pceAddress);
+        uint256 oldExchangeRate = pceToken.getExchangeRate(address(this));
+
+        // Adjust rebase factor: newFactor = oldFactor * (totalDisplay + mintAmount) / totalDisplay
+        rebaseFactor = Math.mulDiv(oldRebaseFactor, currentTotalDisplay + mintAmount, currentTotalDisplay);
+
+        // Adjust exchange rate: newRate = oldRate * newRebaseFactor / oldRebaseFactor
+        uint256 newRate = Math.mulDiv(oldExchangeRate, rebaseFactor, oldRebaseFactor);
+        pceToken.adjustExchangeRate(address(this), newRate);
+
+        uint256 newExchangeRate = pceToken.getExchangeRate(address(this));
+        emit TokenSplit(mintAmount, oldExchangeRate, newExchangeRate, oldRebaseFactor, rebaseFactor);
+    }
+
+    function grantRateManagerRole(address account) external onlyRateManager {
+        require(account != address(0), "Invalid account address");
+        _roles[RATE_MANAGER_ROLE][account] = true;
+        emit RateManagerRoleGranted(account);
+    }
+
+    function revokeRateManagerRole(address account) external onlyRateManager {
+        require(account != address(0), "Invalid account address");
+        _roles[RATE_MANAGER_ROLE][account] = false;
+        emit RateManagerRoleRevoked(account);
+    }
+
     function version() public pure returns (string memory) {
-        return "1.0.13";
+        return "1.0.14";
     }
 }
