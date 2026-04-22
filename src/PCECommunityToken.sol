@@ -56,6 +56,24 @@ contract PCECommunityToken is
     bytes32 public constant CLAIM_WITH_AUTHORIZATION_TYPEHASH =
         0x0b6aae1d90e3a85a25061f4c51e754a9cce2a86cf2f51fb09be1001de8fb7c0a;
 
+    /*
+        keccak256(
+            "TransferWithAuthorizationWithMessageCount(address from,address to,uint256 value,
+                uint256 validAfter,uint256 validBefore,bytes32 nonce,uint256 messageCount)"
+        )
+    */
+    bytes32 public constant TRANSFER_WITH_AUTHORIZATION_WITH_MESSAGE_COUNT_TYPEHASH =
+        0xbd5d42154bfea4ab9874186856d7f4024f087ed1d032940fc2bb1072cf855cfe;
+
+    /*
+        keccak256(
+            "TransferFromWithAuthorizationWithMessageCount(address spender,address from,address to,uint256 value,
+                uint256 validAfter,uint256 validBefore,bytes32 nonce,uint256 messageCount)"
+        )
+    */
+    bytes32 public constant TRANSFER_FROM_WITH_AUTHORIZATION_WITH_MESSAGE_COUNT_TYPEHASH =
+        0x13fcc8397683033a52e999616037110db35913dff276c6b4e8766d1acf918b9c;
+
     address public pceAddress;
     uint256 public initialFactor;
     uint256 public epochTime;
@@ -113,6 +131,7 @@ contract PCECommunityToken is
     event TokenSplit(uint256 mintAmount, uint256 oldExchangeRate, uint256 newExchangeRate, uint256 oldRebaseFactor, uint256 newRebaseFactor);
     event RateManagerRoleGranted(address indexed account);
     event RateManagerRoleRevoked(address indexed account);
+    event TransferWithMessageCount(address indexed from, address indexed to, uint256 displayAmount, uint256 messageCount);
 
     function initialize(string memory name, string memory symbol, uint256 _initialFactor) public initializer {
         require(_initialFactor > 0, "Initial factor must be > 0");
@@ -373,6 +392,19 @@ contract PCECommunityToken is
         return ret;
     }
 
+    function transferWithMessageCount(address receiver, uint256 displayAmount, uint256 messageCount) public returns (bool) {
+        updateFactorIfNeeded();
+        uint256 rawBalance = super.balanceOf(_msgSender());
+        uint256 rawAmount = displayBalanceToRawBalance(displayAmount);
+        bool ret = super.transfer(receiver, rawAmount);
+
+        _mintArigatoCreation(_msgSender(), rawAmount, rawBalance, messageCount);
+
+        emit TransferWithMessageCount(_msgSender(), receiver, displayAmount, messageCount);
+
+        return ret;
+    }
+
     function _spendAllowance(address owner, address spender, uint256 value) internal virtual override {
         // Check infinity approve flag first
         if (_infinityApproveFlags[owner][spender]) {
@@ -397,6 +429,19 @@ contract PCECommunityToken is
         bool ret = super.transferFrom(sender, receiver, rawAmount);
 
         _mintArigatoCreation(sender, rawAmount, rawBalance, 1);
+
+        return ret;
+    }
+
+    function transferFromWithMessageCount(address sender, address receiver, uint256 displayBalance, uint256 messageCount) public returns (bool) {
+        updateFactorIfNeeded();
+        uint256 rawBalance = super.balanceOf(sender);
+        uint256 rawAmount = displayBalanceToRawBalance(displayBalance);
+        bool ret = super.transferFrom(sender, receiver, rawAmount);
+
+        _mintArigatoCreation(sender, rawAmount, rawBalance, messageCount);
+
+        emit TransferWithMessageCount(sender, receiver, displayBalance, messageCount);
 
         return ret;
     }
@@ -626,6 +671,125 @@ contract PCECommunityToken is
         _collectFeeAsPCE(from, _msgSender(), displayFee);
 
         _mintArigatoCreation(from, rawAmount, rawBalance, 1);
+    }
+
+    function transferWithAuthorizationWithMessageCount(
+        address from, address to, uint256 displayAmount, uint256 validAfter, uint256 validBefore, bytes32 nonce, uint8 v, bytes32 r, bytes32 s, uint256 messageCount
+    )
+        public
+    {
+        updateFactorIfNeeded();
+        uint256 rawBalance = super.balanceOf(from);
+        uint256 rawAmount = displayBalanceToRawBalance(displayAmount);
+        uint256 displayFee = getMetaTransactionFee();
+        uint256 rawFee = displayBalanceToRawBalance(displayFee);
+
+        // Prevent zero-amount transfer that only charges fee
+        require(rawAmount > 0, "Amount must be greater than zero");
+
+        require(block.timestamp > validAfter, "Not yet valid");
+        require(block.timestamp < validBefore, "Authorization expired");
+        require(!_authorizationStates[from][nonce], "Authorization used");
+
+        bytes memory data = abi.encode(
+            TRANSFER_WITH_AUTHORIZATION_WITH_MESSAGE_COUNT_TYPEHASH,
+            from,
+            to,
+            displayAmount,
+            validAfter,
+            validBefore,
+            nonce,
+            messageCount
+        );
+        bytes32 digest = keccak256(abi.encodePacked(
+            "\x19\x01",
+            this.DOMAIN_SEPARATOR(),
+            keccak256(data)
+        ));
+
+        require(
+            ECRecover.recover(digest, v, r, s) == from,
+            "Invalid signature"
+        );
+
+        _authorizationStates[from][nonce] = true;
+        emit AuthorizationUsed(from, nonce);
+
+        super._transfer(from, to, rawAmount);
+        super._transfer(from, _msgSender(), rawFee);
+
+        emit MetaTransactionFeeCollected(from, _msgSender(), displayFee, rawFee);
+        emit TransferWithMessageCount(from, to, displayAmount, messageCount);
+
+        _mintArigatoCreation(from, rawAmount, rawBalance, messageCount);
+    }
+
+    function transferFromWithAuthorizationWithMessageCount(
+        address spender, address from, address to, uint256 displayAmount, uint256 validAfter, uint256 validBefore, bytes32 nonce, uint8 v, bytes32 r, bytes32 s, uint256 messageCount
+    )
+        public
+    {
+        updateFactorIfNeeded();
+
+        // Input address validation
+        require(spender != address(0), "Invalid spender address");
+        require(from != address(0), "Invalid from address");
+        require(to != address(0), "Invalid to address");
+
+        uint256 rawBalance = super.balanceOf(from);
+        uint256 rawAmount = displayBalanceToRawBalance(displayAmount);
+        uint256 displayFee = getMetaTransactionFee();
+        uint256 rawFee = displayBalanceToRawBalance(displayFee);
+
+        // Prevent zero-amount fee drain attack
+        require(rawAmount > 0, "Amount must be greater than zero");
+
+        require(block.timestamp > validAfter, "Not yet valid");
+        require(block.timestamp < validBefore, "Authorization expired");
+        require(!_authorizationStates[spender][nonce], "Authorization used");
+        require(rawBalance >= (rawAmount + rawFee), "Insufficient balance");
+        // Include fee in allowance check
+        require(
+            _infinityApproveFlags[from][spender]
+                || super.allowance(from, spender) >= (rawAmount + rawFee),
+            "Insufficient allowance"
+        );
+
+        bytes memory data = abi.encode(
+            TRANSFER_FROM_WITH_AUTHORIZATION_WITH_MESSAGE_COUNT_TYPEHASH,
+            spender,
+            from,
+            to,
+            displayAmount,
+            validAfter,
+            validBefore,
+            nonce,
+            messageCount
+        );
+        bytes32 digest = keccak256(abi.encodePacked(
+            "\x19\x01",
+            this.DOMAIN_SEPARATOR(),
+            keccak256(data)
+        ));
+
+        // Use ECRecover.recover for address(0) guard
+        require(
+            ECRecover.recover(digest, v, r, s) == spender,
+            "Invalid signature"
+        );
+
+        _authorizationStates[spender][nonce] = true;
+        emit AuthorizationUsed(spender, nonce);
+
+        // Include fee in allowance spend
+        _spendAllowance(from, spender, rawAmount + rawFee);
+        super._transfer(from, to, rawAmount);
+        super._transfer(from, _msgSender(), rawFee);
+
+        emit MetaTransactionFeeCollected(from, _msgSender(), displayFee, rawFee);
+        emit TransferWithMessageCount(from, to, displayAmount, messageCount);
+
+        _mintArigatoCreation(from, rawAmount, rawBalance, messageCount);
     }
 
     /*
