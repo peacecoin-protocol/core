@@ -2,24 +2,22 @@
 pragma solidity 0.8.30;
 
 import { ERC20Upgradeable } from "@openzeppelin/contracts-upgradeable/token/ERC20/ERC20Upgradeable.sol";
-import { ERC20BurnableUpgradeable } from
-    "@openzeppelin/contracts-upgradeable/token/ERC20/extensions/ERC20BurnableUpgradeable.sol";
 import { Initializable } from "@openzeppelin/contracts-upgradeable/proxy/utils/Initializable.sol";
 import { OwnableUpgradeable } from "@openzeppelin/contracts-upgradeable/access/OwnableUpgradeable.sol";
 import { ERC20PermitUpgradeable } from "@openzeppelin/contracts-upgradeable/token/ERC20/extensions/ERC20PermitUpgradeable.sol";
 import { PCEToken } from "./PCEToken.sol";
-import { Utils } from "./lib/Utils.sol";
 import { EIP3009 } from "./lib/EIP3009.sol";
 import { ECRecover } from "./lib/ECRecover.sol";
 import { TokenSetting } from "./lib/TokenSetting.sol";
 import { ExchangeAllowMethod } from "./lib/Enum.sol";
 import { Math } from "@openzeppelin/contracts/utils/math/Math.sol";
 import { VoucherSystem } from "./lib/VoucherSystem.sol";
+import { TokenValueOps } from "./lib/TokenValueOps.sol";
+import { ArigatoCreation } from "./lib/ArigatoCreation.sol";
 
 contract PCECommunityToken is
     Initializable,
     ERC20Upgradeable,
-    ERC20BurnableUpgradeable,
     OwnableUpgradeable,
     EIP3009,
     ERC20PermitUpgradeable,
@@ -101,7 +99,7 @@ contract PCECommunityToken is
         uint256 claimedAmount;
         uint256 claimedDisplayAmount;
         uint256 totalClaimCount;
-        string ipfsCid;  // Optional IPFS CID for additional metadata
+        string ipfsCid;
     }
 
     mapping(address user => AccountInfo accountInfo) private _accountInfos;
@@ -285,91 +283,31 @@ contract PCECommunityToken is
     )
         internal
     {
-        // ** Global mint limit
-        uint256 maxArigatoCreationMintToday = Math.mulDiv(midnightTotalSupply, maxIncreaseOfTotalSupplyBp, BP_BASE);
-        if (maxArigatoCreationMintToday <= 0 || maxArigatoCreationMintToday <= mintArigatoCreationToday) {
-            return;
-        }
-        uint256 remainingArigatoCreationMintToday = maxArigatoCreationMintToday - mintArigatoCreationToday;
-        uint256 remainingArigatoCreationMintTodayForGuest;
-
-        // Use storage to persist individual mint tracking across transactions
         AccountInfo storage accountInfo = _accountInfos[sender];
 
-        bool isGuest = accountInfo.firstTransactionTime == accountInfo.lastModifiedMidnightBalanceTime;
-        if (isGuest) {
-            uint256 maxArigatoCreationMintTodayForGuest = Math.mulDiv(maxArigatoCreationMintToday, 1, 10);
-            if (
-                maxArigatoCreationMintTodayForGuest <= 0
-                    || maxArigatoCreationMintTodayForGuest <= mintArigatoCreationTodayForGuest
-            ) {
-                return;
-            }
-            remainingArigatoCreationMintTodayForGuest =
-                maxArigatoCreationMintTodayForGuest - mintArigatoCreationTodayForGuest;
-        }
+        (uint256 mintAmount, bool isGuest) = ArigatoCreation.compute(
+            ArigatoCreation.AccountInfo({
+                midnightBalance: accountInfo.midnightBalance,
+                firstTransactionTime: accountInfo.firstTransactionTime,
+                lastModifiedMidnightBalanceTime: accountInfo.lastModifiedMidnightBalanceTime,
+                mintArigatoCreationToday: accountInfo.mintArigatoCreationToday
+            }),
+            ArigatoCreation.Params({
+                midnightTotalSupply: midnightTotalSupply,
+                maxIncreaseOfTotalSupplyBp: maxIncreaseOfTotalSupplyBp,
+                maxIncreaseBp: maxIncreaseBp,
+                maxUsageBp: maxUsageBp,
+                changeBp: changeBp,
+                mintArigatoCreationToday: mintArigatoCreationToday,
+                mintArigatoCreationTodayForGuest: mintArigatoCreationTodayForGuest,
+                rawAmount: rawAmount,
+                rawBalance: rawBalance,
+                messageCharacters: messageCharacters
+            })
+        );
 
-        // ** Calculation of mint amount
-        // increaseRate = (maxIncreaseRate - changeRate * abs(maxUsageRate - usageRate)) * valueOfMessageCharacter
-        uint256 usageBp = Math.mulDiv(rawAmount, BP_BASE, rawBalance);
-        uint256 absUsageBp = usageBp > maxUsageBp ? usageBp - maxUsageBp : uint256(maxUsageBp) - usageBp;
-        uint256 changeMulBp = Math.mulDiv(uint256(changeBp), absUsageBp, BP_BASE);
-        if (changeMulBp >= maxIncreaseBp) {
-            return;
-        }
-        uint256 messageLength = messageCharacters > 0 ? messageCharacters : 1;
-        uint256 messageBp =
-            messageLength > MAX_CHARACTER_LENGTH ? BP_BASE : Math.mulDiv(messageLength, BP_BASE, MAX_CHARACTER_LENGTH);
-        uint256 increaseBp = uint256(maxIncreaseBp) - Math.mulDiv(changeMulBp, messageBp, BP_BASE);
-        uint256 mintAmount = Math.mulDiv(rawAmount, increaseBp, BP_BASE);
-        if (mintAmount > remainingArigatoCreationMintToday) {
-            mintAmount = remainingArigatoCreationMintToday;
-        }
+        if (mintAmount == 0) return;
 
-        // ** Sender mint limit (with cumulative tracking via storage)
-        // mintArigatoCreationToday initial value is 1 (gas optimization), subtract 1 for actual minted
-        uint256 actualMinted = accountInfo.mintArigatoCreationToday > 0
-            ? accountInfo.mintArigatoCreationToday - 1
-            : 0;
-
-        if (!isGuest) {
-            uint256 maxArigatoCreationMintTodayForSender =
-                Math.mulDiv(maxArigatoCreationMintToday, accountInfo.midnightBalance, midnightTotalSupply);
-            if (maxArigatoCreationMintTodayForSender <= 0) {
-                return;
-            }
-            // Check cumulative sender limit
-            uint256 remainingSenderCap = maxArigatoCreationMintTodayForSender > actualMinted
-                ? maxArigatoCreationMintTodayForSender - actualMinted
-                : 0;
-            if (remainingSenderCap == 0) {
-                return;
-            }
-            if (mintAmount > remainingSenderCap) {
-                mintAmount = remainingSenderCap;
-            }
-        } else {
-            // Guest can mint only 1% of maxArigatoCreationMintToday
-            if (mintAmount > remainingArigatoCreationMintTodayForGuest) {
-                mintAmount = remainingArigatoCreationMintTodayForGuest;
-            }
-            uint256 maxArigatoCreationMintTodayForGuestSender = Math.mulDiv(maxArigatoCreationMintToday, 1, 100);
-            if (maxArigatoCreationMintTodayForGuestSender <= 0) {
-                return;
-            }
-            // Check cumulative guest sender limit
-            uint256 remainingGuestSenderCap = maxArigatoCreationMintTodayForGuestSender > actualMinted
-                ? maxArigatoCreationMintTodayForGuestSender - actualMinted
-                : 0;
-            if (remainingGuestSenderCap == 0) {
-                return;
-            }
-            if (mintAmount > remainingGuestSenderCap) {
-                mintAmount = remainingGuestSenderCap;
-            }
-        }
-
-        // ** Execute mint
         _mint(sender, mintAmount);
         unchecked {
             accountInfo.mintArigatoCreationToday += mintAmount;
@@ -386,9 +324,7 @@ contract PCECommunityToken is
         uint256 rawBalance = super.balanceOf(_msgSender());
         uint256 rawAmount = displayBalanceToRawBalance(displayAmount);
         bool ret = super.transfer(receiver, rawAmount);
-
         _mintArigatoCreation(_msgSender(), rawAmount, rawBalance, 1);
-
         return ret;
     }
 
@@ -397,11 +333,8 @@ contract PCECommunityToken is
         uint256 rawBalance = super.balanceOf(_msgSender());
         uint256 rawAmount = displayBalanceToRawBalance(displayAmount);
         bool ret = super.transfer(receiver, rawAmount);
-
         _mintArigatoCreation(_msgSender(), rawAmount, rawBalance, messageCount);
-
         emit TransferWithMessageCount(_msgSender(), receiver, displayAmount, messageCount);
-
         return ret;
     }
 
@@ -427,9 +360,7 @@ contract PCECommunityToken is
         uint256 rawBalance = super.balanceOf(sender);
         uint256 rawAmount = displayBalanceToRawBalance(displayBalance);
         bool ret = super.transferFrom(sender, receiver, rawAmount);
-
         _mintArigatoCreation(sender, rawAmount, rawBalance, 1);
-
         return ret;
     }
 
@@ -438,11 +369,8 @@ contract PCECommunityToken is
         uint256 rawBalance = super.balanceOf(sender);
         uint256 rawAmount = displayBalanceToRawBalance(displayBalance);
         bool ret = super.transferFrom(sender, receiver, rawAmount);
-
         _mintArigatoCreation(sender, rawAmount, rawBalance, messageCount);
-
         emit TransferWithMessageCount(sender, receiver, displayBalance, messageCount);
-
         return ret;
     }
 
@@ -462,14 +390,16 @@ contract PCECommunityToken is
         _mint(to, displayBalanceToRawBalance(displayBalance));
     }
 
-    function burn(uint256 displayBalance) public override {
+    function burn(uint256 displayBalance) public {
         updateFactorIfNeeded();
-        super.burn(displayBalanceToRawBalance(displayBalance));
+        _burn(_msgSender(), displayBalanceToRawBalance(displayBalance));
     }
 
-    function burnFrom(address account, uint256 displayBalance) public override {
+    function burnFrom(address account, uint256 displayBalance) public {
         updateFactorIfNeeded();
-        super.burnFrom(account, displayBalanceToRawBalance(displayBalance));
+        uint256 rawBalance = displayBalanceToRawBalance(displayBalance);
+        _spendAllowance(account, _msgSender(), rawBalance);
+        _burn(account, rawBalance);
     }
 
     function burnByPCEToken(address account, uint256 displayBalance) external {
@@ -490,58 +420,22 @@ contract PCECommunityToken is
         return (endDay - startDay) >= intervalDays;
     }
 
-    function _isAllowExchange(bool isIncome, address tokenAddress) private view returns (bool) {
-        ExchangeAllowMethod allowMethod = isIncome ? incomeExchangeAllowMethod : outgoExchangeAllowMethod;
-        address[] memory targetTokens = isIncome ? incomeTargetTokens : outgoTargetTokens;
-        if (allowMethod == ExchangeAllowMethod.None) {
-            return false;
-        } else if (allowMethod == ExchangeAllowMethod.All) {
-            return true;
-        } else if (allowMethod == ExchangeAllowMethod.Include) {
-            for (uint256 i = 0; i < targetTokens.length;) {
-                if (targetTokens[i] == tokenAddress) {
-                    return true;
-                }
-                unchecked {
-                    i++;
-                }
-            }
-            return false;
-        } else if (allowMethod == ExchangeAllowMethod.Exclude) {
-            for (uint256 i = 0; i < targetTokens.length;) {
-                if (targetTokens[i] == tokenAddress) {
-                    return false;
-                }
-                unchecked {
-                    i++;
-                }
-            }
-            return true;
-        } else {
-            revert("Invalid exchangeAllowMethod");
-        }
-    }
-
     function isAllowOutgoExchange(address tokenAddress) public view returns (bool) {
-        return _isAllowExchange(false, tokenAddress);
+        return TokenValueOps.isAllowExchange(
+            false, tokenAddress, incomeExchangeAllowMethod, outgoExchangeAllowMethod, incomeTargetTokens, outgoTargetTokens
+        );
     }
 
     function isAllowIncomeExchange(address tokenAddress) public view returns (bool) {
-        return _isAllowExchange(true, tokenAddress);
+        return TokenValueOps.isAllowExchange(
+            true, tokenAddress, incomeExchangeAllowMethod, outgoExchangeAllowMethod, incomeTargetTokens, outgoTargetTokens
+        );
     }
 
     function swapTokens(address toTokenAddress, uint256 amountToSwap) public {
         address sender = _msgSender();
         updateFactorIfNeeded();
-        PCEToken pceToken = PCEToken(pceAddress);
-        pceToken.updateFactorIfNeeded();
-
-        Utils.LocalToken memory fromToken = pceToken.getLocalToken(address(this));
-        require(fromToken.isExists, "From token not found");
-
-        Utils.LocalToken memory toToken = pceToken.getLocalToken(toTokenAddress);
-        require(toToken.isExists, "Target token not found");
-
+        PCEToken(pceAddress).updateFactorIfNeeded();
         PCECommunityToken to = PCECommunityToken(toTokenAddress);
         to.updateFactorIfNeeded();
 
@@ -549,37 +443,57 @@ contract PCECommunityToken is
         require(isAllowOutgoExchange(toTokenAddress), "Outgo exchange not allowed");
         require(to.isAllowIncomeExchange(address(this)), "Income exchange not allowed");
 
-        uint256 targetTokenAmount = Math.mulDiv(
-            Math.mulDiv(
-                Math.mulDiv(amountToSwap, 10 ** 18, fromToken.exchangeRate),
-                pceToken.getCurrentFactor(),
-                getCurrentFactor()
-            ),
-            Math.mulDiv(toToken.exchangeRate, to.getCurrentFactor(), INITIAL_FACTOR),
-            pceToken.getCurrentFactor()
+        uint256 targetTokenAmount = TokenValueOps.computeSwapAmount(
+            pceAddress, address(this), toTokenAddress, amountToSwap, getCurrentFactor(), to.getCurrentFactor()
         );
-
-        require(targetTokenAmount > 0, "Invalid amount to swap");
-
         super._burn(sender, displayBalanceToRawBalance(amountToSwap));
         to.mint(sender, targetTokenAmount);
     }
 
     function getMetaTransactionFee() public view returns (uint256) {
-        PCEToken pceToken = PCEToken(pceAddress);
-        uint256 pceTokenFee = pceToken.getMetaTransactionFee();
-        uint256 rate = pceToken.getSwapRate(address(this));
-        return Math.mulDiv(pceTokenFee, rate, 2**96);
+        return getMetaTransactionFeeWithBaseFee(block.basefee);
     }
 
     function getMetaTransactionFeeWithBaseFee(uint256 _baseFee) public view returns (uint256) {
         PCEToken pceToken = PCEToken(pceAddress);
-        uint256 pceTokenFee = pceToken.getMetaTransactionFeeWithBaseFee(_baseFee);
-        uint256 rate = pceToken.getSwapRate(address(this));
-        return Math.mulDiv(pceTokenFee, rate, 2**96);
+        return Math.mulDiv(
+            pceToken.getMetaTransactionFeeWithBaseFee(_baseFee),
+            pceToken.getSwapRate(address(this)),
+            2**96
+        );
+    }
+
+    function _digest(bytes memory data) internal view returns (bytes32) {
+        return keccak256(abi.encodePacked("\x19\x01", this.DOMAIN_SEPARATOR(), keccak256(data)));
+    }
+
+    function _useAuthorization(
+        address authorizer,
+        uint256 validAfter,
+        uint256 validBefore,
+        bytes32 nonce,
+        bytes32 digest,
+        uint8 v,
+        bytes32 r,
+        bytes32 s
+    )
+        internal
+    {
+        require(block.timestamp > validAfter, "Not yet valid");
+        require(block.timestamp < validBefore, "Authorization expired");
+        require(!_authorizationStates[authorizer][nonce], "Authorization used");
+        require(ECRecover.recover(digest, v, r, s) == authorizer, "Invalid signature");
+        _authorizationStates[authorizer][nonce] = true;
+        emit AuthorizationUsed(authorizer, nonce);
     }
 
     function _collectFeeAsPCE(address from, address relayer, uint256 displayFee) internal returns (uint256) {
+        // Preserve the pre-PIP-13 zero-fee behaviour: if the configured meta-tx
+        // fee is zero there is nothing to collect and we must skip the swap so
+        // the downstream `swapFeeFromLocalToken` non-zero check doesn't brick
+        // meta-tx / voucher flows.
+        if (displayFee == 0) return 0;
+
         uint256 rawFee = displayBalanceToRawBalance(displayFee);
         _burn(from, rawFee);
         PCEToken pceToken = PCEToken(pceAddress);
@@ -599,7 +513,6 @@ contract PCECommunityToken is
         uint256 rawAmount = displayBalanceToRawBalance(displayAmount);
         uint256 displayFee = getMetaTransactionFee();
 
-        // Prevent zero-amount transfer that only charges fee
         require(rawAmount > 0, "Amount must be greater than zero");
 
         _transferWithAuthorization(from, to, displayAmount, validAfter, validBefore, nonce, v, r, s, rawAmount);
@@ -616,7 +529,6 @@ contract PCECommunityToken is
     {
         updateFactorIfNeeded();
 
-        // Input address validation
         require(spender != address(0), "Invalid spender address");
         require(from != address(0), "Invalid from address");
         require(to != address(0), "Invalid to address");
@@ -626,47 +538,28 @@ contract PCECommunityToken is
         uint256 displayFee = getMetaTransactionFee();
         uint256 rawFee = displayBalanceToRawBalance(displayFee);
 
-        // Prevent zero-amount fee drain attack
         require(rawAmount > 0, "Amount must be greater than zero");
-
-        require(block.timestamp > validAfter, "Not yet valid");
-        require(block.timestamp < validBefore, "Authorization expired");
-        require(!_authorizationStates[spender][nonce], "Authorization used");
         require(rawBalance >= (rawAmount + rawFee), "Insufficient balance");
-        // Include fee in allowance check
         require(
             _infinityApproveFlags[from][spender]
                 || super.allowance(from, spender) >= (rawAmount + rawFee),
             "Insufficient allowance"
         );
 
-        bytes memory data = abi.encode(
-            TRANSFER_FROM_WITH_AUTHORIZATION_TYPEHASH,
-            spender,
-            from,
-            to,
-            displayAmount,
+        _useAuthorization(spender,
             validAfter,
             validBefore,
-            nonce
-        );
-        bytes32 digest = keccak256(abi.encodePacked(
-            "\x19\x01",
-            this.DOMAIN_SEPARATOR(),
-            keccak256(data)
-        ));
-
-        // Use ECRecover.recover for address(0) guard
-        require(
-            ECRecover.recover(digest, v, r, s) == spender,
-            "Invalid signature"
+            nonce,
+            _digest(abi.encode(
+                TRANSFER_FROM_WITH_AUTHORIZATION_TYPEHASH,
+                spender, from, to, displayAmount, validAfter, validBefore, nonce
+            )),
+            v, r, s
         );
 
-        _authorizationStates[spender][nonce] = true;
-        emit AuthorizationUsed(spender, nonce);
-
-        // Include fee in allowance spend
-        _spendAllowance(from, spender, rawAmount + rawFee);
+        if (!_infinityApproveFlags[from][spender]) {
+            _spendAllowance(from, spender, rawAmount + rawFee);
+        }
         super._transfer(from, to, rawAmount);
         _collectFeeAsPCE(from, _msgSender(), displayFee);
 
@@ -682,43 +575,23 @@ contract PCECommunityToken is
         uint256 rawBalance = super.balanceOf(from);
         uint256 rawAmount = displayBalanceToRawBalance(displayAmount);
         uint256 displayFee = getMetaTransactionFee();
-        uint256 rawFee = displayBalanceToRawBalance(displayFee);
 
-        // Prevent zero-amount transfer that only charges fee
         require(rawAmount > 0, "Amount must be greater than zero");
 
-        require(block.timestamp > validAfter, "Not yet valid");
-        require(block.timestamp < validBefore, "Authorization expired");
-        require(!_authorizationStates[from][nonce], "Authorization used");
-
-        bytes memory data = abi.encode(
-            TRANSFER_WITH_AUTHORIZATION_WITH_MESSAGE_COUNT_TYPEHASH,
-            from,
-            to,
-            displayAmount,
+        _useAuthorization(from,
             validAfter,
             validBefore,
             nonce,
-            messageCount
+            _digest(abi.encode(
+                TRANSFER_WITH_AUTHORIZATION_WITH_MESSAGE_COUNT_TYPEHASH,
+                from, to, displayAmount, validAfter, validBefore, nonce, messageCount
+            )),
+            v, r, s
         );
-        bytes32 digest = keccak256(abi.encodePacked(
-            "\x19\x01",
-            this.DOMAIN_SEPARATOR(),
-            keccak256(data)
-        ));
-
-        require(
-            ECRecover.recover(digest, v, r, s) == from,
-            "Invalid signature"
-        );
-
-        _authorizationStates[from][nonce] = true;
-        emit AuthorizationUsed(from, nonce);
 
         super._transfer(from, to, rawAmount);
-        super._transfer(from, _msgSender(), rawFee);
+        _collectFeeAsPCE(from, _msgSender(), displayFee);
 
-        emit MetaTransactionFeeCollected(from, _msgSender(), displayFee, rawFee);
         emit TransferWithMessageCount(from, to, displayAmount, messageCount);
 
         _mintArigatoCreation(from, rawAmount, rawBalance, messageCount);
@@ -731,7 +604,6 @@ contract PCECommunityToken is
     {
         updateFactorIfNeeded();
 
-        // Input address validation
         require(spender != address(0), "Invalid spender address");
         require(from != address(0), "Invalid from address");
         require(to != address(0), "Invalid to address");
@@ -741,52 +613,31 @@ contract PCECommunityToken is
         uint256 displayFee = getMetaTransactionFee();
         uint256 rawFee = displayBalanceToRawBalance(displayFee);
 
-        // Prevent zero-amount fee drain attack
         require(rawAmount > 0, "Amount must be greater than zero");
-
-        require(block.timestamp > validAfter, "Not yet valid");
-        require(block.timestamp < validBefore, "Authorization expired");
-        require(!_authorizationStates[spender][nonce], "Authorization used");
         require(rawBalance >= (rawAmount + rawFee), "Insufficient balance");
-        // Include fee in allowance check
         require(
             _infinityApproveFlags[from][spender]
                 || super.allowance(from, spender) >= (rawAmount + rawFee),
             "Insufficient allowance"
         );
 
-        bytes memory data = abi.encode(
-            TRANSFER_FROM_WITH_AUTHORIZATION_WITH_MESSAGE_COUNT_TYPEHASH,
-            spender,
-            from,
-            to,
-            displayAmount,
+        _useAuthorization(spender,
             validAfter,
             validBefore,
             nonce,
-            messageCount
-        );
-        bytes32 digest = keccak256(abi.encodePacked(
-            "\x19\x01",
-            this.DOMAIN_SEPARATOR(),
-            keccak256(data)
-        ));
-
-        // Use ECRecover.recover for address(0) guard
-        require(
-            ECRecover.recover(digest, v, r, s) == spender,
-            "Invalid signature"
+            _digest(abi.encode(
+                TRANSFER_FROM_WITH_AUTHORIZATION_WITH_MESSAGE_COUNT_TYPEHASH,
+                spender, from, to, displayAmount, validAfter, validBefore, nonce, messageCount
+            )),
+            v, r, s
         );
 
-        _authorizationStates[spender][nonce] = true;
-        emit AuthorizationUsed(spender, nonce);
-
-        // Include fee in allowance spend
-        _spendAllowance(from, spender, rawAmount + rawFee);
+        if (!_infinityApproveFlags[from][spender]) {
+            _spendAllowance(from, spender, rawAmount + rawFee);
+        }
         super._transfer(from, to, rawAmount);
-        super._transfer(from, _msgSender(), rawFee);
+        _collectFeeAsPCE(from, _msgSender(), displayFee);
 
-        emit MetaTransactionFeeCollected(from, _msgSender(), displayFee, rawFee);
         emit TransferWithMessageCount(from, to, displayAmount, messageCount);
 
         _mintArigatoCreation(from, rawAmount, rawBalance, messageCount);
@@ -875,50 +726,51 @@ contract PCECommunityToken is
     {
         updateFactorIfNeeded();
 
-        // Input address validation
         require(owner != address(0), "Invalid owner address");
         require(spender != address(0), "Invalid spender address");
 
         uint256 displayFee = getMetaTransactionFee();
         uint256 rawFee = displayBalanceToRawBalance(displayFee);
-
-        require(block.timestamp > validAfter, "Not yet valid");
-        require(block.timestamp < validBefore, "Authorization expired");
-        require(!_authorizationStates[owner][nonce], "Authorization used");
         require(super.balanceOf(owner) >= rawFee, "Insufficient balance");
 
-        bytes memory data = abi.encode(
-            SET_INFINITY_APPROVE_FLAG_WITH_AUTHORIZATION_TYPEHASH,
-            owner,
-            spender,
-            flag,
+        _useAuthorization(owner,
             validAfter,
             validBefore,
-            nonce
+            nonce,
+            _digest(abi.encode(
+                SET_INFINITY_APPROVE_FLAG_WITH_AUTHORIZATION_TYPEHASH,
+                owner, spender, flag, validAfter, validBefore, nonce
+            )),
+            v, r, s
         );
-        bytes32 digest = keccak256(abi.encodePacked(
-            "\x19\x01",
-            this.DOMAIN_SEPARATOR(),
-            keccak256(data)
-        ));
-
-        // Use ECRecover.recover for address(0) guard
-        require(
-            ECRecover.recover(digest, v, r, s) == owner,
-            "Invalid signature"
-        );
-
-        _authorizationStates[owner][nonce] = true;
-        emit AuthorizationUsed(owner, nonce);
 
         _infinityApproveFlags[owner][spender] = flag;
         emit InfinityApproveFlagSet(owner, spender, flag);
 
-        // Collect meta transaction fee from owner
         _collectFeeAsPCE(owner, _msgSender(), displayFee);
     }
 
-    // Voucher functions
+    // ====================================================================
+    // Voucher functions (delegated to VoucherSystem library)
+    //
+    // Heavy logic lives in VoucherSystem.sol as public (linked) functions;
+    // `__libTransfer` / `__libCollectFeeAsPCE` below are self-call hooks the
+    // library uses to reach internal ERC20 transfers and fee collection.
+    // ====================================================================
+
+    modifier onlySelf() {
+        require(msg.sender == address(this), "Only self");
+        _;
+    }
+
+    function __libTransfer(address from, address to, uint256 rawAmount) external onlySelf {
+        super._transfer(from, to, rawAmount);
+    }
+
+    function __libCollectFeeAsPCE(address from, address relayer, uint256 displayFee) external onlySelf {
+        _collectFeeAsPCE(from, relayer, displayFee);
+    }
+
     function registerVoucherIssuance(
         string memory issuanceId,
         string memory _name,
@@ -933,36 +785,23 @@ contract PCECommunityToken is
     )
         external
     {
-        uint256 initialFundsRawAmount = displayBalanceToRawBalance(_initialFunds);
-        require(super.balanceOf(_msgSender()) >= initialFundsRawAmount, "Insufficient balance");
-
-        VoucherSystem.registerIssuance(
+        VoucherSystem.registerIssuanceWithLock(
             _voucherStorage,
             issuanceId,
             _name,
             _amountPerClaim,
             _countLimitPerUser,
             _totalAmountLimit,
-            initialFundsRawAmount,
+            _initialFunds,
             _startTime,
             _endTime,
             _merkleRoot,
-            _msgSender(),
             _ipfsCid
         );
-
-        // Lock tokens from issuer
-        super._transfer(_msgSender(), address(this), initialFundsRawAmount);
     }
 
     function claimVoucher(string memory issuanceId, string memory code, bytes32[] calldata proof) external {
-        VoucherSystem.VoucherIssuance memory issuance = VoucherSystem.getIssuance(_voucherStorage, issuanceId);
-        uint256 rawClaimAmount = displayBalanceToRawBalance(issuance.amountPerClaim);
-
-        VoucherSystem.claim(_voucherStorage, issuanceId, code, proof, _msgSender(), rawClaimAmount);
-
-        // Transfer tokens from contract to claimer
-        super._transfer(address(this), _msgSender(), rawClaimAmount);
+        VoucherSystem.claimAndTransfer(_voucherStorage, issuanceId, code, proof);
     }
 
     function claimVoucherWithAuthorization(
@@ -980,52 +819,22 @@ contract PCECommunityToken is
         external
     {
         updateFactorIfNeeded();
-
-        // Input address validation
         require(claimer != address(0), "Invalid claimer address");
-
-        uint256 displayFee = getMetaTransactionFee();
-        uint256 rawFee = displayBalanceToRawBalance(displayFee);
-
-        require(block.timestamp > validAfter, "Not yet valid");
-        require(block.timestamp < validBefore, "Authorization expired");
-        require(!_authorizationStates[claimer][nonce], "Authorization used");
-
-        bytes memory data = abi.encode(
-            CLAIM_WITH_AUTHORIZATION_TYPEHASH,
+        VoucherSystem.claimWithAuthorizationAndTransfer(
+            _voucherStorage,
+            _authorizationStates,
             claimer,
-            keccak256(bytes(issuanceId)),
-            keccak256(bytes(code)),
+            issuanceId,
+            code,
+            proof,
             validAfter,
             validBefore,
-            nonce
+            nonce,
+            v,
+            r,
+            s,
+            _msgSender()
         );
-        bytes32 digest = keccak256(abi.encodePacked("\x19\x01", this.DOMAIN_SEPARATOR(), keccak256(data)));
-
-        // Use ECRecover.recover for address(0) guard
-        require(ECRecover.recover(digest, v, r, s) == claimer, "Invalid signature");
-
-        _authorizationStates[claimer][nonce] = true;
-        emit AuthorizationUsed(claimer, nonce);
-
-        // Get claim amount and convert to raw balance
-        VoucherSystem.VoucherIssuance memory issuance = VoucherSystem.getIssuance(_voucherStorage, issuanceId);
-        uint256 rawClaimAmount = displayBalanceToRawBalance(issuance.amountPerClaim);
-
-        // Check if claim amount is greater than meta transaction fee
-        require(rawClaimAmount > rawFee, "Claim amount must be greater than fee");
-
-        // Claim from voucher
-        VoucherSystem.claim(_voucherStorage, issuanceId, code, proof, claimer, rawClaimAmount);
-
-        // Calculate amount after deducting fee
-        uint256 amountAfterFee = rawClaimAmount - rawFee;
-
-        // Transfer amount after fee to claimer
-        super._transfer(address(this), claimer, amountAfterFee);
-
-        // Collect meta transaction fee from claimed amount (swap to PCE for relayer)
-        _collectFeeAsPCE(address(this), _msgSender(), displayFee);
     }
 
     function getVoucherIssuanceInfo(string memory issuanceId)
@@ -1076,31 +885,15 @@ contract PCECommunityToken is
     }
 
     function addVoucherFunds(string memory issuanceId, uint256 _amount) external {
-        uint256 rawAmount = displayBalanceToRawBalance(_amount);
-        require(super.balanceOf(_msgSender()) >= rawAmount, "Insufficient balance");
-
-        VoucherSystem.addFunds(_voucherStorage, issuanceId, rawAmount, _msgSender());
-
-        // Transfer tokens from sender to contract
-        super._transfer(_msgSender(), address(this), rawAmount);
+        VoucherSystem.addFundsWithTransfer(_voucherStorage, issuanceId, _amount);
     }
 
     function withdrawVoucherFunds(string memory issuanceId, uint256 _amount) external {
-        uint256 rawAmount = displayBalanceToRawBalance(_amount);
-
-        uint256 withdrawnRawAmount = VoucherSystem.withdrawFunds(_voucherStorage, issuanceId, rawAmount, _msgSender());
-
-        // Transfer tokens from contract to sender
-        super._transfer(address(this), _msgSender(), withdrawnRawAmount);
+        VoucherSystem.withdrawFundsWithTransfer(_voucherStorage, issuanceId, _amount);
     }
 
     function terminateVoucherIssuance(string memory issuanceId) external {
-        uint256 remainingRawAmount = VoucherSystem.terminateIssuance(_voucherStorage, issuanceId, _msgSender());
-
-        // Transfer remaining tokens from contract to sender
-        if (remainingRawAmount > 0) {
-            super._transfer(address(this), _msgSender(), remainingRawAmount);
-        }
+        VoucherSystem.terminateWithRefund(_voucherStorage, issuanceId);
     }
 
     function setTokenSettings(
@@ -1145,61 +938,28 @@ contract PCECommunityToken is
     }
 
     function initializeTreasury(address wallet) external onlyOwner {
-        require(treasuryWallet == address(0), "Already initialized");
-        require(wallet != address(0), "Invalid wallet address");
-        treasuryWallet = wallet;
-        rebaseFactor = INITIAL_FACTOR;
-        _roles[RATE_MANAGER_ROLE][_msgSender()] = true;
-        emit TreasuryWalletSet(wallet);
-        emit RateManagerRoleGranted(_msgSender());
+        (treasuryWallet, rebaseFactor) =
+            TokenValueOps.initializeTreasury(treasuryWallet, wallet, _msgSender(), _roles, RATE_MANAGER_ROLE);
     }
 
     function setTreasuryWallet(address wallet) external onlyRateManager {
-        require(wallet != address(0), "Invalid wallet address");
-        treasuryWallet = wallet;
-        emit TreasuryWalletSet(wallet);
+        treasuryWallet = TokenValueOps.setTreasuryWallet(wallet);
     }
 
     function increaseTokenValue(uint256 pceAmount) external onlyRateManager {
-        require(pceAmount > 0, "Amount must be > 0");
-        PCEToken pceToken = PCEToken(pceAddress);
-        uint256 oldExchangeRate = pceToken.getExchangeRate(address(this));
-        pceToken.addReserve(address(this), pceAmount, treasuryWallet);
-        uint256 newExchangeRate = pceToken.getExchangeRate(address(this));
-        emit TokenValueIncreased(pceAmount, oldExchangeRate, newExchangeRate);
+        TokenValueOps.increaseTokenValue(pceAmount, pceAddress, address(this), treasuryWallet);
     }
 
     function splitToken(uint256 mintAmount) external onlyRateManager {
-        require(mintAmount > 0, "Amount must be > 0");
-
-        uint256 oldRebaseFactor = rebaseFactor;
-        uint256 currentTotalDisplay = totalSupply();
-        require(currentTotalDisplay > 0, "No supply to split");
-
-        PCEToken pceToken = PCEToken(pceAddress);
-        uint256 oldExchangeRate = pceToken.getExchangeRate(address(this));
-
-        // Adjust rebase factor: newFactor = oldFactor * (totalDisplay + mintAmount) / totalDisplay
-        rebaseFactor = Math.mulDiv(oldRebaseFactor, currentTotalDisplay + mintAmount, currentTotalDisplay);
-
-        // Adjust exchange rate: newRate = oldRate * newRebaseFactor / oldRebaseFactor
-        uint256 newRate = Math.mulDiv(oldExchangeRate, rebaseFactor, oldRebaseFactor);
-        pceToken.adjustExchangeRate(address(this), newRate);
-
-        uint256 newExchangeRate = pceToken.getExchangeRate(address(this));
-        emit TokenSplit(mintAmount, oldExchangeRate, newExchangeRate, oldRebaseFactor, rebaseFactor);
+        rebaseFactor = TokenValueOps.splitToken(mintAmount, totalSupply(), rebaseFactor, pceAddress, address(this));
     }
 
     function grantRateManagerRole(address account) external onlyRateManager {
-        require(account != address(0), "Invalid account address");
-        _roles[RATE_MANAGER_ROLE][account] = true;
-        emit RateManagerRoleGranted(account);
+        TokenValueOps.grantRateManagerRole(account, _roles, RATE_MANAGER_ROLE);
     }
 
     function revokeRateManagerRole(address account) external onlyRateManager {
-        require(account != address(0), "Invalid account address");
-        _roles[RATE_MANAGER_ROLE][account] = false;
-        emit RateManagerRoleRevoked(account);
+        TokenValueOps.revokeRateManagerRole(account, _roles, RATE_MANAGER_ROLE);
     }
 
     function version() public pure returns (string memory) {

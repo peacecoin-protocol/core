@@ -806,6 +806,255 @@ contract PCETest is Test {
         assertTrue(token.balanceOf(user2) > user2CTBefore, "Recipient should receive community tokens");
     }
 
+    // --- PIP-13 fee swap across remaining *WithAuthorization* paths ---
+    // These all use `this.DOMAIN_SEPARATOR()` (ERC20Permit domain), not the
+    // hardcoded "PeaceBaseCoin" domain used by _transferWithAuthorization.
+
+    function _setupAuthSigner(uint256 pk, uint256 initialCT) internal returns (address signer) {
+        signer = vm.addr(pk);
+        vm.startPrank(owner);
+        pceToken.swapToLocalToken(address(token), 500 ether);
+        vm.warp(block.timestamp + 1 days);
+        token.transfer(signer, initialCT);
+        vm.warp(block.timestamp + 1 days);
+        vm.stopPrank();
+    }
+
+    function _signDigestBytes(uint256 pk, bytes memory data) internal view returns (uint8 v, bytes32 r, bytes32 s) {
+        bytes32 digest = keccak256(abi.encodePacked("\x19\x01", token.DOMAIN_SEPARATOR(), keccak256(data)));
+        (v, r, s) = vm.sign(pk, digest);
+    }
+
+    function testTransferFromWithAuthorizationFeeSwap() public {
+        // In transferFromWithAuthorization the `spender` is the authorizer
+        // (who signs) and must hold allowance over `from`. We set
+        // spender == from == signer so the signer effectively authorises
+        // themselves; the relayer just submits the transaction.
+        uint256 pk = 0xBE11E;
+        address signer = _setupAuthSigner(pk, 50 ether);
+        address relayer = address(0x9A);
+
+        vm.prank(signer);
+        token.approve(signer, 20 ether);
+
+        uint256 nonce = uint256(bytes32(keccak256("tf-auth-fee")));
+        uint256 amt = 5 ether;
+        bytes memory data = abi.encode(
+            token.TRANSFER_FROM_WITH_AUTHORIZATION_TYPEHASH(),
+            signer, signer, user2, amt, uint256(0), type(uint256).max, bytes32(nonce)
+        );
+        (uint8 v, bytes32 r, bytes32 s) = _signDigestBytes(pk, data);
+
+        uint256 relayerPCEBefore = pceToken.balanceOf(relayer);
+        uint256 relayerCTBefore = token.balanceOf(relayer);
+        uint256 user2Before = token.balanceOf(user2);
+
+        vm.prank(relayer);
+        token.transferFromWithAuthorization(
+            signer, signer, user2, amt, 0, type(uint256).max, bytes32(nonce), v, r, s
+        );
+
+        assertGt(pceToken.balanceOf(relayer), relayerPCEBefore, "relayer should receive PCE fee");
+        assertEq(token.balanceOf(relayer), relayerCTBefore, "relayer should NOT receive CT");
+        assertGt(token.balanceOf(user2), user2Before, "recipient should receive tokens");
+    }
+
+    function testTransferWithAuthorizationWithMessageCount() public {
+        uint256 pk = 0xBEE;
+        address signer = _setupAuthSigner(pk, 50 ether);
+        address relayer = address(0x9B);
+
+        uint256 nonce = uint256(bytes32(keccak256("tw-mc-auth")));
+        uint256 amt = 5 ether;
+        uint256 messageCount = 7;
+        bytes memory data = abi.encode(
+            token.TRANSFER_WITH_AUTHORIZATION_WITH_MESSAGE_COUNT_TYPEHASH(),
+            signer, user2, amt, uint256(0), type(uint256).max, bytes32(nonce), messageCount
+        );
+        (uint8 v, bytes32 r, bytes32 s) = _signDigestBytes(pk, data);
+
+        uint256 relayerPCEBefore = pceToken.balanceOf(relayer);
+        uint256 user2Before = token.balanceOf(user2);
+
+        vm.expectEmit(true, true, false, true);
+        emit PCECommunityToken.TransferWithMessageCount(signer, user2, amt, messageCount);
+
+        vm.prank(relayer);
+        token.transferWithAuthorizationWithMessageCount(
+            signer, user2, amt, 0, type(uint256).max, bytes32(nonce), v, r, s, messageCount
+        );
+
+        assertGt(pceToken.balanceOf(relayer), relayerPCEBefore, "relayer should receive PCE fee");
+        assertGt(token.balanceOf(user2), user2Before, "recipient should receive tokens");
+    }
+
+    function testTransferWithAuthorizationWithMessageCountRejectsReplay() public {
+        uint256 pk = 0xBEE2;
+        address signer = _setupAuthSigner(pk, 50 ether);
+        address relayer = address(0x9C);
+
+        uint256 nonce = uint256(bytes32(keccak256("tw-mc-replay")));
+        bytes memory data = abi.encode(
+            token.TRANSFER_WITH_AUTHORIZATION_WITH_MESSAGE_COUNT_TYPEHASH(),
+            signer, user2, uint256(1 ether), uint256(0), type(uint256).max, bytes32(nonce), uint256(1)
+        );
+        (uint8 v, bytes32 r, bytes32 s) = _signDigestBytes(pk, data);
+
+        vm.prank(relayer);
+        token.transferWithAuthorizationWithMessageCount(
+            signer, user2, 1 ether, 0, type(uint256).max, bytes32(nonce), v, r, s, 1
+        );
+
+        vm.prank(relayer);
+        vm.expectRevert("Authorization used");
+        token.transferWithAuthorizationWithMessageCount(
+            signer, user2, 1 ether, 0, type(uint256).max, bytes32(nonce), v, r, s, 1
+        );
+    }
+
+    function testTransferFromWithAuthorizationWithMessageCount() public {
+        // Same authorizer-self pattern as testTransferFromWithAuthorizationFeeSwap.
+        uint256 pk = 0xBEE3;
+        address signer = _setupAuthSigner(pk, 50 ether);
+        address relayer = address(0x9D);
+
+        vm.prank(signer);
+        token.approve(signer, 20 ether);
+
+        uint256 nonce = uint256(bytes32(keccak256("tfw-mc")));
+        uint256 amt = 3 ether;
+        uint256 messageCount = 5;
+        bytes memory data = abi.encode(
+            token.TRANSFER_FROM_WITH_AUTHORIZATION_WITH_MESSAGE_COUNT_TYPEHASH(),
+            signer, signer, user2, amt, uint256(0), type(uint256).max, bytes32(nonce), messageCount
+        );
+        (uint8 v, bytes32 r, bytes32 s) = _signDigestBytes(pk, data);
+
+        uint256 relayerPCEBefore = pceToken.balanceOf(relayer);
+        uint256 user2Before = token.balanceOf(user2);
+
+        vm.prank(relayer);
+        token.transferFromWithAuthorizationWithMessageCount(
+            signer, signer, user2, amt, 0, type(uint256).max, bytes32(nonce), v, r, s, messageCount
+        );
+
+        assertGt(pceToken.balanceOf(relayer), relayerPCEBefore, "relayer should receive PCE fee");
+        assertGt(token.balanceOf(user2), user2Before, "recipient should receive tokens");
+    }
+
+    function testSetInfinityApproveFlagWithAuthorizationFeeSwap() public {
+        uint256 pk = 0xBEE4;
+        address signer = _setupAuthSigner(pk, 50 ether);
+        address relayer = address(0x9E);
+        address spender = address(0xAA);
+
+        uint256 nonce = uint256(bytes32(keccak256("set-inf-auth")));
+        bytes memory data = abi.encode(
+            token.SET_INFINITY_APPROVE_FLAG_WITH_AUTHORIZATION_TYPEHASH(),
+            signer, spender, true, uint256(0), type(uint256).max, bytes32(nonce)
+        );
+        (uint8 v, bytes32 r, bytes32 s) = _signDigestBytes(pk, data);
+
+        uint256 relayerPCEBefore = pceToken.balanceOf(relayer);
+        assertFalse(token.getInfinityApproveFlag(signer, spender), "flag should start false");
+
+        vm.prank(relayer);
+        token.setInfinityApproveFlagWithAuthorization(
+            signer, spender, true, 0, type(uint256).max, bytes32(nonce), v, r, s
+        );
+
+        assertTrue(token.getInfinityApproveFlag(signer, spender), "flag should be set true");
+        assertGt(pceToken.balanceOf(relayer), relayerPCEBefore, "relayer should receive PCE fee");
+    }
+
+    function testClaimVoucherWithAuthorizationRejectsReplay() public {
+        // VoucherSystem.claimWithAuthorizationAndTransfer has its own nonce
+        // check (not sharing _useAuthorization); verify it still blocks replay.
+        uint256 pk = 0xBEE6;
+        address signer = _setupAuthSigner(pk, 0);
+        address relayer = address(0xA1);
+
+        bytes32 leaf = keccak256(abi.encodePacked("REPLAY-CODE"));
+        uint256 endTime = block.timestamp + 365 days;
+        vm.startPrank(owner);
+        // Configure countLimitPerUser=2 so the first claim does not exhaust the
+        // per-user limit, and we can prove the second attempt is rejected by nonce.
+        token.registerVoucherIssuance(
+            "VR001", "replay-voucher", 10 ether, 2, 20 ether, 20 ether,
+            0, endTime, leaf, ""
+        );
+        vm.stopPrank();
+
+        uint256 nonce = uint256(bytes32(keccak256("claim-replay")));
+        bytes32[] memory proof = new bytes32[](0);
+        bytes memory data = abi.encode(
+            token.CLAIM_WITH_AUTHORIZATION_TYPEHASH(),
+            signer,
+            keccak256(bytes("VR001")),
+            keccak256(bytes("REPLAY-CODE")),
+            uint256(0),
+            type(uint256).max,
+            bytes32(nonce)
+        );
+        (uint8 v, bytes32 r, bytes32 s) = _signDigestBytes(pk, data);
+
+        vm.prank(relayer);
+        token.claimVoucherWithAuthorization(
+            signer, "VR001", "REPLAY-CODE", proof, 0, type(uint256).max, bytes32(nonce), v, r, s
+        );
+
+        vm.prank(relayer);
+        vm.expectRevert("Authorization used");
+        token.claimVoucherWithAuthorization(
+            signer, "VR001", "REPLAY-CODE", proof, 0, type(uint256).max, bytes32(nonce), v, r, s
+        );
+    }
+
+    function testClaimVoucherWithAuthorizationFeeSwap() public {
+        uint256 pk = 0xBEE5;
+        address signer = _setupAuthSigner(pk, 0); // claimer needs no prior balance
+        address relayer = address(0x9F);
+
+        // Register a voucher funded by `owner`.
+        // Simple 1-leaf merkle tree: root = keccak256(code)
+        bytes32 leaf = keccak256(abi.encodePacked("CLAIMCODE-001"));
+
+        // Use a far-future endTime so factor-decay warps do not invalidate it.
+        uint256 endTime = block.timestamp + 365 days;
+        vm.startPrank(owner);
+        token.registerVoucherIssuance(
+            "VA001", "auth-voucher", 10 ether, 1, 10 ether, 10 ether,
+            0, endTime, leaf, ""
+        );
+        vm.stopPrank();
+
+        uint256 nonce = uint256(bytes32(keccak256("claim-auth")));
+        bytes32[] memory proof = new bytes32[](0);
+        bytes memory data = abi.encode(
+            token.CLAIM_WITH_AUTHORIZATION_TYPEHASH(),
+            signer,
+            keccak256(bytes("VA001")),
+            keccak256(bytes("CLAIMCODE-001")),
+            uint256(0),
+            type(uint256).max,
+            bytes32(nonce)
+        );
+        (uint8 v, bytes32 r, bytes32 s) = _signDigestBytes(pk, data);
+
+        uint256 signerCTBefore = token.balanceOf(signer);
+        uint256 relayerPCEBefore = pceToken.balanceOf(relayer);
+        uint256 relayerCTBefore = token.balanceOf(relayer);
+
+        vm.prank(relayer);
+        token.claimVoucherWithAuthorization(
+            signer, "VA001", "CLAIMCODE-001", proof, 0, type(uint256).max, bytes32(nonce), v, r, s
+        );
+
+        assertGt(token.balanceOf(signer), signerCTBefore, "claimer should receive CT (minus fee)");
+        assertGt(pceToken.balanceOf(relayer), relayerPCEBefore, "relayer should receive PCE fee");
+        assertEq(token.balanceOf(relayer), relayerCTBefore, "relayer should NOT receive CT");
+    }
+
     // --- PIP-15: Message Count Parameter Tests ---
 
     function testTransferWithMessageCount() public {
@@ -825,6 +1074,7 @@ contract PCETest is Test {
 
         uint256 balanceAfterMsg5 = token.balanceOf(user1);
         // user1 should have less than before (sent 10) but may have arigato mint
+        assertLt(balanceAfterMsg5, balanceBefore, "user1 balance should decrease after sending tokens");
         uint256 user2Balance = token.balanceOf(user2);
         assertGt(user2Balance, 0, "user2 should have received tokens");
         vm.stopPrank();

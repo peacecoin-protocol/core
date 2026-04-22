@@ -2,6 +2,18 @@
 pragma solidity 0.8.30;
 
 import { MerkleProof } from "@openzeppelin/contracts/utils/cryptography/MerkleProof.sol";
+import { ECRecover } from "./ECRecover.sol";
+
+/// @dev Self-call helpers used by public wrapper functions below. The host
+///      contract MUST restrict these to `msg.sender == address(this)`.
+interface IVoucherHost {
+    function __libTransfer(address from, address to, uint256 rawAmount) external;
+    function __libCollectFeeAsPCE(address from, address relayer, uint256 displayFee) external;
+    function balanceOf(address account) external view returns (uint256);
+    function displayBalanceToRawBalance(uint256 displayBalance) external view returns (uint256);
+    function getMetaTransactionFee() external view returns (uint256);
+    function DOMAIN_SEPARATOR() external view returns (bytes32);
+}
 
 library VoucherSystem {
     // Error codes for canClaim function
@@ -60,6 +72,15 @@ library VoucherSystem {
     event VoucherFundsWithdrawn(string indexed issuanceId, uint256 rawAmount);
     event VoucherIssuanceTerminated(string indexed issuanceId);
 
+    /// @dev Claim-with-authorization typehash. MUST match the host's typehash.
+    bytes32 private constant CLAIM_WITH_AUTHORIZATION_TYPEHASH =
+        0x0b6aae1d90e3a85a25061f4c51e754a9cce2a86cf2f51fb09be1001de8fb7c0a;
+
+    /// @dev Matches the EIP3009 event signature so observers cannot distinguish
+    ///      whether the host or this library emitted it.
+    event AuthorizationUsed(address indexed authorizer, bytes32 indexed nonce);
+
+
     function registerIssuance(
         VoucherStorage storage self,
         string memory issuanceId,
@@ -74,7 +95,7 @@ library VoucherSystem {
         address owner,
         string memory ipfsCid
     )
-        internal
+        public
     {
         // endTime == 0 means unlimited duration, otherwise endTime must be after startTime
         require(endTime == 0 || endTime > startTime, "End time should be after start time");
@@ -119,7 +140,7 @@ library VoucherSystem {
         address claimer,
         uint256 claimRawAmount
     )
-        internal
+        public
         returns (uint256)
     {
         VoucherIssuance memory issuance = self.issuances[issuanceId];
@@ -133,24 +154,12 @@ library VoucherSystem {
         require(issuance.endTime == 0 || block.timestamp < issuance.endTime, "Issuance already ended");
 
         // Check claim count limit per user (0 means unlimited)
-        require(
-            issuance.countLimitPerUser == 0 || self.claimCountPerUser[issuanceId][claimer] < issuance.countLimitPerUser,
-            "Claim count reached limitation"
-        );
-        require(
-            self.remainingRawAmount[issuanceId] >= claimRawAmount,
-            "No more claimable amount"
-        );
+        require(issuance.countLimitPerUser == 0 || self.claimCountPerUser[issuanceId][claimer] < issuance.countLimitPerUser, "Claim count reached limitation");
+        require(self.remainingRawAmount[issuanceId] >= claimRawAmount, "No more claimable amount");
         if (issuance.totalAmountLimit > 0) {
-            require(
-                self.claimedDisplayAmount[issuanceId] + issuance.amountPerClaim <= issuance.totalAmountLimit,
-                "Total amount limit exceeded"
-            );
+            require(self.claimedDisplayAmount[issuanceId] + issuance.amountPerClaim <= issuance.totalAmountLimit, "Total amount limit exceeded");
         }
-        require(
-            MerkleProof.verify(proof, issuance.merkleRoot, keccak256(abi.encodePacked(code))),
-            "Invalid claim proof"
-        );
+        require(MerkleProof.verify(proof, issuance.merkleRoot, keccak256(abi.encodePacked(code))), "Invalid claim proof");
         require(!self.isCodeUsed[issuanceId][code], "Code already used");
 
         self.claimCountPerUser[issuanceId][claimer]++;
@@ -171,7 +180,7 @@ library VoucherSystem {
         uint256 rawAmount,
         address sender
     )
-        internal
+        public
     {
         VoucherIssuance storage issuance = self.issuances[issuanceId];
         require(bytes(issuance.issuanceId).length != 0, "Issuance not found");
@@ -189,7 +198,7 @@ library VoucherSystem {
         uint256 rawAmount,
         address sender
     )
-        internal
+        public
         returns (uint256)
     {
         VoucherIssuance storage issuance = self.issuances[issuanceId];
@@ -210,7 +219,7 @@ library VoucherSystem {
         string memory issuanceId,
         address sender
     )
-        internal
+        public
         returns (uint256)
     {
         VoucherIssuance storage issuance = self.issuances[issuanceId];
@@ -337,5 +346,160 @@ library VoucherSystem {
         }
 
         return (true, ERROR_NONE);
+    }
+
+    // ==================================================================
+    //  High-level wrappers (called from PCECommunityToken, handle the
+    //  display↔raw conversion and token movements via self-call hooks).
+    //  Moving them out of PCECommunityToken keeps its bytecode below the
+    //  EVM contract size limit.
+    // ==================================================================
+
+    function registerIssuanceWithLock(
+        VoucherStorage storage self,
+        string memory issuanceId,
+        string memory name,
+        uint256 amountPerClaim,
+        uint256 countLimitPerUser,
+        uint256 totalAmountLimit,
+        uint256 initialFundsDisplayAmount,
+        uint256 startTime,
+        uint256 endTime,
+        bytes32 merkleRoot,
+        string memory ipfsCid
+    )
+        public
+    {
+        IVoucherHost host = IVoucherHost(address(this));
+        address sender = msg.sender;
+        require(!(host.balanceOf(sender) < initialFundsDisplayAmount), "Insufficient balance");
+        uint256 initialFundsRawAmount = host.displayBalanceToRawBalance(initialFundsDisplayAmount);
+
+        registerIssuance(
+            self, issuanceId, name, amountPerClaim, countLimitPerUser, totalAmountLimit,
+            initialFundsRawAmount, startTime, endTime, merkleRoot, sender, ipfsCid
+        );
+
+        host.__libTransfer(sender, address(this), initialFundsRawAmount);
+    }
+
+    function claimAndTransfer(
+        VoucherStorage storage self,
+        string memory issuanceId,
+        string memory code,
+        bytes32[] calldata proof
+    )
+        public
+    {
+        IVoucherHost host = IVoucherHost(address(this));
+        VoucherIssuance memory issuance = self.issuances[issuanceId];
+        uint256 rawClaimAmount = host.displayBalanceToRawBalance(issuance.amountPerClaim);
+
+        address claimer = msg.sender;
+        claim(self, issuanceId, code, proof, claimer, rawClaimAmount);
+        host.__libTransfer(address(this), claimer, rawClaimAmount);
+    }
+
+    function claimWithAuthorizationAndTransfer(
+        VoucherStorage storage self,
+        mapping(address => mapping(bytes32 => bool)) storage authStates,
+        address claimer,
+        string memory issuanceId,
+        string memory code,
+        bytes32[] calldata proof,
+        uint256 validAfter,
+        uint256 validBefore,
+        bytes32 nonce,
+        uint8 v,
+        bytes32 r,
+        bytes32 s,
+        address relayer
+    )
+        public
+    {
+        IVoucherHost host = IVoucherHost(address(this));
+
+        require(!(block.timestamp <= validAfter), "Not yet valid");
+        require(!(block.timestamp >= validBefore), "Authorization expired");
+        require(!(authStates[claimer][nonce]), "Authorization used");
+
+        bytes32 digest;
+        {
+            bytes memory data = abi.encode(
+                CLAIM_WITH_AUTHORIZATION_TYPEHASH,
+                claimer, keccak256(bytes(issuanceId)), keccak256(bytes(code)),
+                validAfter, validBefore, nonce
+            );
+            digest = keccak256(abi.encodePacked("\x19\x01", host.DOMAIN_SEPARATOR(), keccak256(data)));
+        }
+        require(!(ECRecover.recover(digest, v, r, s) != claimer), "Invalid signature");
+        authStates[claimer][nonce] = true;
+        emit AuthorizationUsed(claimer, nonce);
+
+        // Surface the `Issuance not found` error consistently with claim() instead
+        // of reverting later via a zero-amount fee check on a non-existent entry.
+        require(bytes(self.issuances[issuanceId].issuanceId).length != 0, "Issuance not found");
+
+        uint256 displayFee = host.getMetaTransactionFee();
+        uint256 rawFee = host.displayBalanceToRawBalance(displayFee);
+        uint256 rawClaimAmount = host.displayBalanceToRawBalance(self.issuances[issuanceId].amountPerClaim);
+        require(!(rawClaimAmount <= rawFee), "Claim amount must be greater than fee");
+
+        claim(self, issuanceId, code, proof, claimer, rawClaimAmount);
+
+        host.__libTransfer(address(this), claimer, rawClaimAmount - rawFee);
+        // When `displayFee` rounds down to `rawFee == 0` (e.g. extreme
+        // rebase factor), we didn't actually withhold anything from the
+        // claimer, so skip the PCE swap to avoid paying the relayer out of
+        // the PCE reserve without a matching CT burn.
+        if (rawFee > 0) {
+            host.__libCollectFeeAsPCE(address(this), relayer, displayFee);
+        }
+    }
+
+    function addFundsWithTransfer(
+        VoucherStorage storage self,
+        string memory issuanceId,
+        uint256 displayAmount
+    )
+        public
+    {
+        IVoucherHost host = IVoucherHost(address(this));
+        address sender = msg.sender;
+        require(!(host.balanceOf(sender) < displayAmount), "Insufficient balance");
+        uint256 rawAmount = host.displayBalanceToRawBalance(displayAmount);
+
+        addFunds(self, issuanceId, rawAmount, sender);
+        host.__libTransfer(sender, address(this), rawAmount);
+    }
+
+    function withdrawFundsWithTransfer(
+        VoucherStorage storage self,
+        string memory issuanceId,
+        uint256 displayAmount
+    )
+        public
+    {
+        IVoucherHost host = IVoucherHost(address(this));
+        uint256 rawAmount = host.displayBalanceToRawBalance(displayAmount);
+        address sender = msg.sender;
+
+        uint256 withdrawnRawAmount = withdrawFunds(self, issuanceId, rawAmount, sender);
+        host.__libTransfer(address(this), sender, withdrawnRawAmount);
+    }
+
+    function terminateWithRefund(
+        VoucherStorage storage self,
+        string memory issuanceId
+    )
+        public
+    {
+        IVoucherHost host = IVoucherHost(address(this));
+        address sender = msg.sender;
+
+        uint256 remainingRawAmount = terminateIssuance(self, issuanceId, sender);
+        if (remainingRawAmount > 0) {
+            host.__libTransfer(address(this), sender, remainingRawAmount);
+        }
     }
 }

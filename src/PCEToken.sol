@@ -321,6 +321,11 @@ contract PCEToken is
         require(msg.sender == fromToken, "Caller must be the community token");
         require(localTokens[fromToken].isExists, "Token not registered");
 
+        // A zero-fee meta-tx is valid (the relayer simply waives the fee).
+        // Short-circuit so the `pcetokenAmount > 0` check below doesn't brick
+        // callers when `communityTokenDisplayAmount` is 0.
+        if (communityTokenDisplayAmount == 0) return 0;
+
         updateFactorIfNeeded();
 
         PCECommunityToken target = PCECommunityToken(fromToken);

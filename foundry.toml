@@ -9,6 +9,10 @@
   gas_reports = ["*"]
   optimizer = true
   optimizer_runs = 200
+  # Polygon PoS raised the contract code size limit to 32 KiB via PIP-30
+  # (Ahmedabad hardfork, 2024-09-25). Foundry still defaults to EIP-170's
+  # 24,576-byte limit, so we override here to match the chain.
+  code_size_limit = 32768
   via_ir = true
   out = "out"
   script = "script"
