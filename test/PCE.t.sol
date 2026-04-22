@@ -349,8 +349,8 @@ contract PCETest is Test {
     }
 
     function testVersion() public view {
-        assertEq(pceToken.version(), "1.0.13");
-        assertEq(token.version(), "1.0.14");
+        assertEq(pceToken.version(), "1.0.14");
+        assertEq(token.version(), "1.0.15");
     }
 
     // --- PIP-12: Treasury wallet and token value operations tests ---
@@ -627,5 +627,182 @@ contract PCETest is Test {
         vm.stopPrank();
 
         assertEq(token.treasuryWallet(), address(0x7777), "Treasury wallet should be updated");
+    }
+
+    // --- PIP-13: Meta-Transaction Fee Auto-Swap Tests ---
+
+    function _makeDomainSeparator(address tokenAddr) internal view returns (bytes32) {
+        return keccak256(
+            abi.encode(
+                keccak256("EIP712Domain(string name,string version,uint256 chainId,address verifyingContract)"),
+                keccak256("PeaceBaseCoin"),
+                keccak256("1"),
+                block.chainid,
+                tokenAddr
+            )
+        );
+    }
+
+    function _buildTransferWithAuthDigest(
+        address from,
+        address to,
+        uint256 value,
+        uint256 validAfter,
+        uint256 validBefore,
+        bytes32 nonce
+    )
+        internal
+        view
+        returns (bytes32)
+    {
+        bytes32 domainSeparator = _makeDomainSeparator(address(token));
+        bytes32 structHash = keccak256(
+            abi.encode(
+                bytes32(0x7c7c6cdb67a18743f49ec6fa9b35f50d52ed05cbed4cc592e13b44501c1a2267),
+                from,
+                to,
+                value,
+                validAfter,
+                validBefore,
+                nonce
+            )
+        );
+        return keccak256(abi.encodePacked("\x19\x01", domainSeparator, structHash));
+    }
+
+    function testFeeSwapFromLocalToken() public {
+        // Setup: give community tokens to owner via swapToLocalToken
+        vm.startPrank(owner);
+        pceToken.swapToLocalToken(address(token), 100 ether);
+        vm.warp(block.timestamp + 1 days);
+        token.transfer(user1, 1 ether);
+        vm.warp(block.timestamp + 1 days);
+        vm.stopPrank();
+
+        address relayer = address(0x3);
+        uint256 displayAmount = 1 ether;
+
+        // Call swapFeeFromLocalToken directly as the community token contract
+        uint256 relayerPCEBefore = pceToken.balanceOf(relayer);
+
+        vm.prank(address(token));
+        uint256 pceAmount = pceToken.swapFeeFromLocalToken(address(token), relayer, displayAmount);
+
+        uint256 relayerPCEAfter = pceToken.balanceOf(relayer);
+        assertTrue(pceAmount > 0, "Should return non-zero PCE amount");
+        assertTrue(relayerPCEAfter > relayerPCEBefore, "Relayer should receive PCE");
+    }
+
+    function testSwapFeeFromLocalTokenOnlyCallableByCommunityToken() public {
+        // Non-community-token address should be rejected
+        vm.prank(user1);
+        vm.expectRevert("Caller must be the community token");
+        pceToken.swapFeeFromLocalToken(address(token), user1, 1 ether);
+    }
+
+    function testSwapFeeFromLocalTokenUnregisteredToken() public {
+        // Unregistered token address should be rejected
+        address fakeToken = address(0x999);
+        vm.prank(fakeToken);
+        vm.expectRevert("Token not registered");
+        pceToken.swapFeeFromLocalToken(fakeToken, user1, 1 ether);
+    }
+
+    function testFeeSwapBypassesDailyLimit() public {
+        vm.startPrank(owner);
+        pceToken.swapToLocalToken(address(token), 500 ether);
+
+        // Advance time for midnightBalance setup
+        vm.warp(block.timestamp + 1 days);
+        token.transfer(user1, 1 ether);
+        vm.warp(block.timestamp + 1 days);
+
+        // Exhaust daily swap limit via regular swaps
+        uint256 remaining = token.getRemainingSwapableToPCEBalance();
+        if (remaining > 0) {
+            pceToken.swapFromLocalToken(address(token), remaining);
+        }
+
+        // Verify regular swap now fails
+        vm.expectRevert("Exceeds daily swap limit");
+        pceToken.swapFromLocalToken(address(token), 1 ether);
+        vm.stopPrank();
+
+        // Fee swap should still work despite exhausted daily limit
+        address relayer = address(0x3);
+        uint256 relayerPCEBefore = pceToken.balanceOf(relayer);
+
+        vm.prank(address(token));
+        uint256 pceAmount = pceToken.swapFeeFromLocalToken(address(token), relayer, 0.01 ether);
+
+        assertTrue(pceAmount > 0, "Fee swap should succeed even when daily limit exhausted");
+        assertTrue(pceToken.balanceOf(relayer) > relayerPCEBefore, "Relayer should receive PCE");
+    }
+
+    function testFeeSwapDoesNotAffectDailyLimitCounters() public {
+        vm.startPrank(owner);
+        pceToken.swapToLocalToken(address(token), 100 ether);
+
+        vm.warp(block.timestamp + 1 days);
+        token.transfer(user1, 1 ether);
+        vm.warp(block.timestamp + 1 days);
+
+        uint256 globalRemainingBefore = token.getRemainingSwapableToPCEBalance();
+        vm.stopPrank();
+
+        // Do a fee swap
+        vm.prank(address(token));
+        pceToken.swapFeeFromLocalToken(address(token), address(0x3), 0.01 ether);
+
+        // Daily limit counters should be unchanged
+        uint256 globalRemainingAfter = token.getRemainingSwapableToPCEBalance();
+        assertEq(globalRemainingBefore, globalRemainingAfter, "Fee swap should not affect daily limit counters");
+    }
+
+    function testTransferWithAuthorizationFeeSwap() public {
+        // Setup: create signer with known private key
+        uint256 signerPrivateKey = 0xA11CE;
+        address signer = vm.addr(signerPrivateKey);
+        address relayer = address(0x3);
+
+        // Give signer community tokens
+        vm.startPrank(owner);
+        pceToken.swapToLocalToken(address(token), 200 ether);
+        vm.warp(block.timestamp + 1 days);
+        token.transfer(signer, 50 ether);
+        vm.warp(block.timestamp + 1 days);
+        vm.stopPrank();
+
+        // Build EIP712 signature for transferWithAuthorization
+        uint256 transferAmount = 5 ether;
+        bytes32 nonce = bytes32(uint256(1));
+        uint256 validAfter = 0;
+        uint256 validBefore = type(uint256).max;
+
+        bytes32 digest = _buildTransferWithAuthDigest(
+            signer, user2, transferAmount, validAfter, validBefore, nonce
+        );
+        (uint8 v, bytes32 r, bytes32 s) = vm.sign(signerPrivateKey, digest);
+
+        // Record balances before
+        uint256 relayerPCEBefore = pceToken.balanceOf(relayer);
+        uint256 relayerCTBefore = token.balanceOf(relayer);
+        uint256 user2CTBefore = token.balanceOf(user2);
+
+        // Execute as relayer
+        vm.prank(relayer);
+        token.transferWithAuthorization(
+            signer, user2, transferAmount, validAfter, validBefore, nonce, v, r, s
+        );
+
+        // Verify: relayer received PCE, NOT community tokens
+        uint256 relayerPCEAfter = pceToken.balanceOf(relayer);
+        uint256 relayerCTAfter = token.balanceOf(relayer);
+
+        assertTrue(relayerPCEAfter > relayerPCEBefore, "Relayer should receive PCE as fee");
+        assertEq(relayerCTAfter, relayerCTBefore, "Relayer should NOT receive community tokens");
+
+        // Verify: user2 received the transfer
+        assertTrue(token.balanceOf(user2) > user2CTBefore, "Recipient should receive community tokens");
     }
 }
