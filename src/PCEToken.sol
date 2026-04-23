@@ -46,6 +46,9 @@ contract PCEToken is
     event TokensSwappedFromLocalToken(
         address indexed to, address indexed fromToken, uint256 targetTokenAmount, uint256 pceTokenAmount
     );
+    event FeeSwappedFromLocalToken(
+        address indexed fromToken, address indexed relayer, uint256 communityTokenAmount, uint256 pceAmount
+    );
 
     uint256 public constant INITIAL_FACTOR = 10 ** 18;
     uint256 private constant Q96 = 2 ** 96;
@@ -307,6 +310,45 @@ contract PCEToken is
         emit TokensSwappedFromLocalToken(_msgSender(), fromToken, amountToSwap, pcetokenAmount);
     }
 
+    function swapFeeFromLocalToken(
+        address fromToken,
+        address relayer,
+        uint256 communityTokenDisplayAmount
+    )
+        external
+        returns (uint256)
+    {
+        require(msg.sender == fromToken, "Caller must be the community token");
+        require(localTokens[fromToken].isExists, "Token not registered");
+
+        // A zero-fee meta-tx is valid (the relayer simply waives the fee).
+        // Short-circuit so the `pcetokenAmount > 0` check below doesn't brick
+        // callers when `communityTokenDisplayAmount` is 0.
+        if (communityTokenDisplayAmount == 0) return 0;
+
+        updateFactorIfNeeded();
+
+        PCECommunityToken target = PCECommunityToken(fromToken);
+
+        uint256 pcetokenAmount = Math.mulDiv(
+            Math.mulDiv(communityTokenDisplayAmount, INITIAL_FACTOR, localTokens[fromToken].exchangeRate),
+            lastModifiedFactor,
+            target.getCurrentFactor()
+        );
+        require(pcetokenAmount > 0, "Fee swap amount too small");
+        require(
+            localTokens[fromToken].depositedPCEToken >= pcetokenAmount,
+            "Insufficient deposited PCE token reserve"
+        );
+
+        _transfer(address(this), relayer, pcetokenAmount);
+        localTokens[fromToken].depositedPCEToken -= pcetokenAmount;
+
+        emit FeeSwappedFromLocalToken(fromToken, relayer, communityTokenDisplayAmount, pcetokenAmount);
+
+        return pcetokenAmount;
+    }
+
     function getNativeTokenToPceTokenRate() public view returns (uint256) {
         return nativeTokenToPceTokenRate;
     }
@@ -413,6 +455,6 @@ contract PCEToken is
     function _authorizeUpgrade(address newImplementation) internal virtual override onlyOwner { }
 
     function version() public pure returns (string memory) {
-        return "1.0.13";
+        return "1.0.14";
     }
 }

@@ -28,8 +28,6 @@ abstract contract EIP3009 is ERC20Upgradeable, EIP712Domain {
 
     event AuthorizationUsed(address indexed authorizer, bytes32 indexed nonce);
 
-    string internal constant _INVALID_SIGNATURE_ERROR = "EIP3009: invalid signature";
-
     function authorizationState(address authorizer, bytes32 nonce) external view returns (bool) {
         return _authorizationStates[authorizer][nonce];
     }

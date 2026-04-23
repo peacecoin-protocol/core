@@ -48,12 +48,22 @@ ERRORS=0
 validate_contract() {
     local contract="$1"
     local candidates="$2"
+    # `unsafe_allow_linked_libraries` is off by default so unintended external
+    # library linkage in future upgrades is still caught. Set it per-contract
+    # below only for contracts we deliberately link libraries into.
+    local unsafe_allow_linked_libraries="${3:-0}"
+
+    local extra_args=()
+    if [ "$unsafe_allow_linked_libraries" = "1" ]; then
+        extra_args+=("--unsafeAllow" "external-library-linking")
+    fi
 
     for candidate in $candidates; do
         if npx @openzeppelin/upgrades-core@^1.32.3 validate out/build-info \
             --contract "$contract" \
             --reference "$REF_DIR_NAME:$candidate" \
-            --referenceBuildInfoDirs "$REF_BUILD_INFO" 2>/dev/null; then
+            --referenceBuildInfoDirs "$REF_BUILD_INFO" \
+            "${extra_args[@]}" 2>/dev/null; then
             echo "  $contract: OK (reference: $candidate)"
             return 0
         fi
@@ -81,7 +91,9 @@ done
 COMMUNITY_CANDIDATES="$COMMUNITY_CANDIDATES src/PCECommunityToken.sol:PCECommunityToken"
 
 validate_contract "src/PCEToken.sol:PCEToken" "$PCE_CANDIDATES" || ERRORS=1
-validate_contract "src/PCECommunityToken.sol:PCECommunityToken" "$COMMUNITY_CANDIDATES" || ERRORS=1
+# PCECommunityToken legitimately links VoucherSystem/TokenValueOps/ArigatoCreation
+# (external libraries) since v15 — allow the OZ validator to accept that.
+validate_contract "src/PCECommunityToken.sol:PCECommunityToken" "$COMMUNITY_CANDIDATES" 1 || ERRORS=1
 
 if [ "$ERRORS" -ne 0 ]; then
     echo "ERROR: Storage layout validation failed. Aborting upgrade."
