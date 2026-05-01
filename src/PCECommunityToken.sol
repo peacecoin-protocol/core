@@ -435,7 +435,8 @@ contract PCECommunityToken is
     function swapTokens(address toTokenAddress, uint256 amountToSwap) public {
         address sender = _msgSender();
         updateFactorIfNeeded();
-        PCEToken(pceAddress).updateFactorIfNeeded();
+        PCEToken pceToken = PCEToken(pceAddress);
+        pceToken.updateFactorIfNeeded();
         PCECommunityToken to = PCECommunityToken(toTokenAddress);
         to.updateFactorIfNeeded();
 
@@ -447,7 +448,10 @@ contract PCECommunityToken is
             pceAddress, address(this), toTokenAddress, amountToSwap, getCurrentFactor(), to.getCurrentFactor()
         );
         super._burn(sender, displayBalanceToRawBalance(amountToSwap));
-        to.mint(sender, targetTokenAmount);
+
+        pceToken.executeInterCommunitySwap(
+            address(this), toTokenAddress, sender, amountToSwap, targetTokenAmount
+        );
     }
 
     function getMetaTransactionFee() public view returns (uint256) {

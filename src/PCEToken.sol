@@ -49,6 +49,9 @@ contract PCEToken is
     event FeeSwappedFromLocalToken(
         address indexed fromToken, address indexed relayer, uint256 communityTokenAmount, uint256 pceAmount
     );
+    event DepositTransferredOnInterCommunitySwap(
+        address indexed fromToken, address indexed toToken, uint256 fromDisplayAmount, uint256 movedPceAmount
+    );
 
     uint256 public constant INITIAL_FACTOR = 10 ** 18;
     uint256 private constant Q96 = 2 ** 96;
@@ -347,6 +350,47 @@ contract PCEToken is
         emit FeeSwappedFromLocalToken(fromToken, relayer, communityTokenDisplayAmount, pcetokenAmount);
 
         return pcetokenAmount;
+    }
+
+    function executeInterCommunitySwap(
+        address fromToken,
+        address toToken,
+        address recipient,
+        uint256 fromDisplayAmount,
+        uint256 toDisplayAmount
+    )
+        external
+        returns (uint256)
+    {
+        require(msg.sender == fromToken, "Caller must be the from-side community token");
+        require(localTokens[fromToken].isExists, "From token not registered");
+        require(localTokens[toToken].isExists, "To token not registered");
+        require(fromToken != toToken, "Same-token swap");
+
+        updateFactorIfNeeded();
+
+        PCECommunityToken from = PCECommunityToken(fromToken);
+
+        uint256 movedPceAmount = Math.mulDiv(
+            Math.mulDiv(fromDisplayAmount, INITIAL_FACTOR, localTokens[fromToken].exchangeRate),
+            lastModifiedFactor,
+            from.getCurrentFactor()
+        );
+
+        if (movedPceAmount > 0) {
+            require(
+                localTokens[fromToken].depositedPCEToken >= movedPceAmount,
+                "Insufficient deposited PCE token reserve at source community"
+            );
+            localTokens[fromToken].depositedPCEToken -= movedPceAmount;
+            localTokens[toToken].depositedPCEToken += movedPceAmount;
+        }
+
+        PCECommunityToken(toToken).mint(recipient, toDisplayAmount);
+
+        emit DepositTransferredOnInterCommunitySwap(fromToken, toToken, fromDisplayAmount, movedPceAmount);
+
+        return movedPceAmount;
     }
 
     function getNativeTokenToPceTokenRate() public view returns (uint256) {
