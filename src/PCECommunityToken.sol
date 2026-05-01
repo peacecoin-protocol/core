@@ -498,6 +498,7 @@ contract PCECommunityToken is
         _burn(from, rawFee);
         PCEToken pceToken = PCEToken(pceAddress);
         uint256 pceAmount = pceToken.swapFeeFromLocalToken(address(this), relayer, displayFee);
+        emit MetaTransactionFeeCollected(from, relayer, displayFee, rawFee);
         emit MetaTransactionFeeSwapped(from, relayer, displayFee, pceAmount);
         return pceAmount;
     }

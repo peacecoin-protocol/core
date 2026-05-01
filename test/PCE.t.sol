@@ -789,6 +789,12 @@ contract PCETest is Test {
         uint256 relayerCTBefore = token.balanceOf(relayer);
         uint256 user2CTBefore = token.balanceOf(user2);
 
+        uint256 displayFee = token.getMetaTransactionFee();
+        uint256 rawFee = token.displayBalanceToRawBalance(displayFee);
+
+        vm.expectEmit(true, true, false, true);
+        emit PCECommunityToken.MetaTransactionFeeCollected(signer, relayer, displayFee, rawFee);
+
         // Execute as relayer
         vm.prank(relayer);
         token.transferWithAuthorization(
