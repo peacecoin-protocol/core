@@ -113,10 +113,13 @@ contract PCECommunityToken is
     mapping(address => uint256) public swappedToPCETodayByAddress;
     mapping(address => uint256) public swappedToPCETodayByAddressModifiedTime;
 
-    // --- V14: Treasury wallet and token value operations (PIP-12) ---
-    address public treasuryWallet;
-    bytes32 public constant RATE_MANAGER_ROLE = keccak256("RATE_MANAGER_ROLE");
-    mapping(bytes32 => mapping(address => bool)) private _roles;
+    // --- V14: Treasury / role storage retained as deprecated for layout compatibility (PIP-12 → PIP-16) ---
+    /// @custom:oz-renamed-from treasuryWallet
+    address private __deprecated_treasuryWallet;
+    /// @custom:oz-renamed-from _roles
+    mapping(bytes32 => mapping(address => bool)) private __deprecated_roles;
+
+    // --- V14: Rebase factor for token splits (used by PIP-16) ---
     uint256 public rebaseFactor;
 
     event PCETransfer(address indexed from, address indexed to, uint256 displayAmount, uint256 rawAmount);
@@ -124,11 +127,6 @@ contract PCECommunityToken is
     event MetaTransactionFeeCollected(address indexed from, address indexed to, uint256 displayFee, uint256 rawFee);
     event MetaTransactionFeeSwapped(address indexed from, address indexed relayer, uint256 communityTokenFee, uint256 pceFee);
     event InfinityApproveFlagSet(address indexed owner, address indexed spender, bool flag);
-    event TreasuryWalletSet(address indexed wallet);
-    event TokenValueIncreased(uint256 pceAmount, uint256 oldExchangeRate, uint256 newExchangeRate);
-    event TokenSplit(uint256 mintAmount, uint256 oldExchangeRate, uint256 newExchangeRate, uint256 oldRebaseFactor, uint256 newRebaseFactor);
-    event RateManagerRoleGranted(address indexed account);
-    event RateManagerRoleRevoked(address indexed account);
     event TransferWithMessageCount(address indexed from, address indexed to, uint256 displayAmount, uint256 messageCount);
 
     function initialize(string memory name, string memory symbol, uint256 _initialFactor) public initializer {
@@ -926,43 +924,14 @@ contract PCECommunityToken is
         );
     }
 
-    // --- V14: Treasury wallet and token value operations (PIP-12) ---
+    // --- V16: PIP-16 internal coordination — only PCEToken can update rebase factor (during splitToken) ---
 
-    modifier onlyRateManager() {
-        require(_roles[RATE_MANAGER_ROLE][_msgSender()], "Not rate manager");
-        _;
-    }
-
-    function hasRole(bytes32 role, address account) public view returns (bool) {
-        return _roles[role][account];
-    }
-
-    function initializeTreasury(address wallet) external onlyOwner {
-        (treasuryWallet, rebaseFactor) =
-            TokenValueOps.initializeTreasury(treasuryWallet, wallet, _msgSender(), _roles, RATE_MANAGER_ROLE);
-    }
-
-    function setTreasuryWallet(address wallet) external onlyRateManager {
-        treasuryWallet = TokenValueOps.setTreasuryWallet(wallet);
-    }
-
-    function increaseTokenValue(uint256 pceAmount) external onlyRateManager {
-        TokenValueOps.increaseTokenValue(pceAmount, pceAddress, address(this), treasuryWallet);
-    }
-
-    function splitToken(uint256 mintAmount) external onlyRateManager {
-        rebaseFactor = TokenValueOps.splitToken(mintAmount, totalSupply(), rebaseFactor, pceAddress, address(this));
-    }
-
-    function grantRateManagerRole(address account) external onlyRateManager {
-        TokenValueOps.grantRateManagerRole(account, _roles, RATE_MANAGER_ROLE);
-    }
-
-    function revokeRateManagerRole(address account) external onlyRateManager {
-        TokenValueOps.revokeRateManagerRole(account, _roles, RATE_MANAGER_ROLE);
+    function applyRebase(uint256 newFactor) external {
+        require(_msgSender() == pceAddress, "Only PCE token");
+        rebaseFactor = newFactor;
     }
 
     function version() public pure returns (string memory) {
-        return "1.0.15";
+        return "1.0.16";
     }
 }
