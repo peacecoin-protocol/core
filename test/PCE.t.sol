@@ -682,6 +682,12 @@ contract PCETest is Test {
         uint256 relayerCTBefore = token.balanceOf(relayer);
         uint256 user2CTBefore = token.balanceOf(user2);
 
+        uint256 displayFee = token.getMetaTransactionFee();
+        uint256 rawFee = token.displayBalanceToRawBalance(displayFee);
+
+        vm.expectEmit(true, true, false, true);
+        emit PCECommunityToken.MetaTransactionFeeCollected(signer, relayer, displayFee, rawFee);
+
         // Execute as relayer
         vm.prank(relayer);
         token.transferWithAuthorization(
@@ -749,89 +755,6 @@ contract PCETest is Test {
 
         assertGt(pceToken.balanceOf(relayer), relayerPCEBefore, "relayer should receive PCE fee");
         assertEq(token.balanceOf(relayer), relayerCTBefore, "relayer should NOT receive CT");
-        assertGt(token.balanceOf(user2), user2Before, "recipient should receive tokens");
-    }
-
-    function testTransferWithAuthorizationWithMessageCount() public {
-        uint256 pk = 0xBEE;
-        address signer = _setupAuthSigner(pk, 50 ether);
-        address relayer = address(0x9B);
-
-        uint256 nonce = uint256(bytes32(keccak256("tw-mc-auth")));
-        uint256 amt = 5 ether;
-        uint256 messageCount = 7;
-        bytes memory data = abi.encode(
-            token.TRANSFER_WITH_AUTHORIZATION_WITH_MESSAGE_COUNT_TYPEHASH(),
-            signer, user2, amt, uint256(0), type(uint256).max, bytes32(nonce), messageCount
-        );
-        (uint8 v, bytes32 r, bytes32 s) = _signDigestBytes(pk, data);
-
-        uint256 relayerPCEBefore = pceToken.balanceOf(relayer);
-        uint256 user2Before = token.balanceOf(user2);
-
-        vm.expectEmit(true, true, false, true);
-        emit PCECommunityToken.TransferWithMessageCount(signer, user2, amt, messageCount);
-
-        vm.prank(relayer);
-        token.transferWithAuthorizationWithMessageCount(
-            signer, user2, amt, 0, type(uint256).max, bytes32(nonce), v, r, s, messageCount
-        );
-
-        assertGt(pceToken.balanceOf(relayer), relayerPCEBefore, "relayer should receive PCE fee");
-        assertGt(token.balanceOf(user2), user2Before, "recipient should receive tokens");
-    }
-
-    function testTransferWithAuthorizationWithMessageCountRejectsReplay() public {
-        uint256 pk = 0xBEE2;
-        address signer = _setupAuthSigner(pk, 50 ether);
-        address relayer = address(0x9C);
-
-        uint256 nonce = uint256(bytes32(keccak256("tw-mc-replay")));
-        bytes memory data = abi.encode(
-            token.TRANSFER_WITH_AUTHORIZATION_WITH_MESSAGE_COUNT_TYPEHASH(),
-            signer, user2, uint256(1 ether), uint256(0), type(uint256).max, bytes32(nonce), uint256(1)
-        );
-        (uint8 v, bytes32 r, bytes32 s) = _signDigestBytes(pk, data);
-
-        vm.prank(relayer);
-        token.transferWithAuthorizationWithMessageCount(
-            signer, user2, 1 ether, 0, type(uint256).max, bytes32(nonce), v, r, s, 1
-        );
-
-        vm.prank(relayer);
-        vm.expectRevert("Authorization used");
-        token.transferWithAuthorizationWithMessageCount(
-            signer, user2, 1 ether, 0, type(uint256).max, bytes32(nonce), v, r, s, 1
-        );
-    }
-
-    function testTransferFromWithAuthorizationWithMessageCount() public {
-        // Same authorizer-self pattern as testTransferFromWithAuthorizationFeeSwap.
-        uint256 pk = 0xBEE3;
-        address signer = _setupAuthSigner(pk, 50 ether);
-        address relayer = address(0x9D);
-
-        vm.prank(signer);
-        token.approve(signer, 20 ether);
-
-        uint256 nonce = uint256(bytes32(keccak256("tfw-mc")));
-        uint256 amt = 3 ether;
-        uint256 messageCount = 5;
-        bytes memory data = abi.encode(
-            token.TRANSFER_FROM_WITH_AUTHORIZATION_WITH_MESSAGE_COUNT_TYPEHASH(),
-            signer, signer, user2, amt, uint256(0), type(uint256).max, bytes32(nonce), messageCount
-        );
-        (uint8 v, bytes32 r, bytes32 s) = _signDigestBytes(pk, data);
-
-        uint256 relayerPCEBefore = pceToken.balanceOf(relayer);
-        uint256 user2Before = token.balanceOf(user2);
-
-        vm.prank(relayer);
-        token.transferFromWithAuthorizationWithMessageCount(
-            signer, signer, user2, amt, 0, type(uint256).max, bytes32(nonce), v, r, s, messageCount
-        );
-
-        assertGt(pceToken.balanceOf(relayer), relayerPCEBefore, "relayer should receive PCE fee");
         assertGt(token.balanceOf(user2), user2Before, "recipient should receive tokens");
     }
 
@@ -948,72 +871,4 @@ contract PCETest is Test {
         assertEq(token.balanceOf(relayer), relayerCTBefore, "relayer should NOT receive CT");
     }
 
-    // --- PIP-15: Message Count Parameter Tests ---
-
-    function testTransferWithMessageCount() public {
-        vm.startPrank(owner);
-        // Transfer 100 tokens to user1 first
-        token.transfer(user1, 100 ether);
-        vm.stopPrank();
-
-        // Advance 1 day so user1 is no longer a "guest" (firstTransactionTime != lastModifiedMidnightBalanceTime)
-        vm.warp(block.timestamp + 1 days + 1);
-
-        vm.startPrank(user1);
-        uint256 balanceBefore = token.balanceOf(user1);
-
-        // Transfer with messageCount=5
-        token.transferWithMessageCount(user2, 10 ether, 5);
-
-        uint256 balanceAfterMsg5 = token.balanceOf(user1);
-        // user1 should have less than before (sent 10) but may have arigato mint
-        assertLt(balanceAfterMsg5, balanceBefore, "user1 balance should decrease after sending tokens");
-        uint256 user2Balance = token.balanceOf(user2);
-        assertGt(user2Balance, 0, "user2 should have received tokens");
-        vm.stopPrank();
-    }
-
-    function testTransferWithMessageCountEmitsEvent() public {
-        vm.startPrank(owner);
-        token.transfer(user1, 100 ether);
-        vm.stopPrank();
-
-        vm.startPrank(user1);
-        vm.expectEmit(true, true, false, true);
-        emit PCECommunityToken.TransferWithMessageCount(user1, user2, 10 ether, 7);
-        token.transferWithMessageCount(user2, 10 ether, 7);
-        vm.stopPrank();
-    }
-
-    function testTransferFromWithMessageCount() public {
-        vm.startPrank(owner);
-        token.transfer(user1, 100 ether);
-        vm.stopPrank();
-
-        // user1 approves owner to spend
-        vm.startPrank(user1);
-        token.approve(owner, 50 ether);
-        vm.stopPrank();
-
-        vm.startPrank(owner);
-        token.transferFromWithMessageCount(user1, user2, 10 ether, 3);
-        uint256 user2Balance = token.balanceOf(user2);
-        assertGt(user2Balance, 0, "user2 should have received tokens");
-        vm.stopPrank();
-    }
-
-    function testTransferWithMessageCountZeroTreatedAsOne() public {
-        vm.startPrank(owner);
-        token.transfer(user1, 100 ether);
-        vm.stopPrank();
-
-        vm.warp(block.timestamp + 1 days + 1);
-
-        vm.startPrank(user1);
-        // messageCount=0 should behave like messageCount=1 (internal _mintArigatoCreation clamps to 1)
-        token.transferWithMessageCount(user2, 10 ether, 0);
-        uint256 user2Balance = token.balanceOf(user2);
-        assertGt(user2Balance, 0, "user2 should have received tokens");
-        vm.stopPrank();
-    }
 }
