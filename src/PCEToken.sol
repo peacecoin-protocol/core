@@ -49,6 +49,17 @@ contract PCEToken is
     event FeeSwappedFromLocalToken(
         address indexed fromToken, address indexed relayer, uint256 communityTokenAmount, uint256 pceAmount
     );
+    event TokenValueIncreased(
+        address indexed communityToken, uint256 pceAmount, uint256 oldExchangeRate, uint256 newExchangeRate
+    );
+    event TokenSplit(
+        address indexed communityToken,
+        uint256 mintAmount,
+        uint256 oldExchangeRate,
+        uint256 newExchangeRate,
+        uint256 oldRebaseFactor,
+        uint256 newRebaseFactor
+    );
 
     uint256 public constant INITIAL_FACTOR = 10 ** 18;
     uint256 private constant Q96 = 2 ** 96;
@@ -426,35 +437,55 @@ contract PCEToken is
         _burn(_msgSender(), amount);
     }
 
-    function addReserve(address communityToken, uint256 pceAmount, address _treasuryWallet) external {
-        require(msg.sender == communityToken, "Only community token");
-        require(localTokens[communityToken].isExists, "Token not found");
+    function increaseTokenValue(address communityToken, uint256 pceAmount) external {
+        require(localTokens[communityToken].isExists, "Target token not found");
+        require(_msgSender() == OwnableUpgradeable(communityToken).owner(), "Only community owner");
         require(pceAmount > 0, "Amount must be > 0");
+
+        updateFactorIfNeeded();
 
         uint256 oldDeposited = localTokens[communityToken].depositedPCEToken;
         uint256 oldRate = localTokens[communityToken].exchangeRate;
 
-        // Transfer PCE from treasury wallet to this contract (requires prior approve)
-        _spendAllowance(_treasuryWallet, address(this), pceAmount);
-        _transfer(_treasuryWallet, address(this), pceAmount);
+        _transfer(_msgSender(), address(this), pceAmount);
 
-        // Update deposited amount
+        // When reserves are fully drained the proportional formula collapses to zero, which would
+        // brick all future swaps. Fall back to keeping the prior rate so the community can recover.
+        uint256 newRate = oldDeposited == 0
+            ? oldRate
+            : Math.mulDiv(oldRate, oldDeposited, oldDeposited + pceAmount);
         localTokens[communityToken].depositedPCEToken = oldDeposited + pceAmount;
+        localTokens[communityToken].exchangeRate = newRate;
 
-        // Adjust exchange rate: newRate = oldRate * oldDeposited / (oldDeposited + pceAmount)
-        localTokens[communityToken].exchangeRate = Math.mulDiv(oldRate, oldDeposited, oldDeposited + pceAmount);
+        emit TokenValueIncreased(communityToken, pceAmount, oldRate, newRate);
     }
 
-    function adjustExchangeRate(address communityToken, uint256 newRate) external {
-        require(msg.sender == communityToken, "Only community token");
-        require(localTokens[communityToken].isExists, "Token not found");
-        require(newRate > 0, "Rate must be > 0");
+    function splitToken(address communityToken, uint256 mintAmount) external {
+        require(localTokens[communityToken].isExists, "Target token not found");
+        require(_msgSender() == OwnableUpgradeable(communityToken).owner(), "Only community owner");
+        require(mintAmount > 0, "Amount must be > 0");
+
+        updateFactorIfNeeded();
+
+        PCECommunityToken target = PCECommunityToken(communityToken);
+        uint256 currentSupply = target.totalSupply();
+        require(currentSupply > 0, "No supply to split");
+
+        uint256 oldRebase = target.rebaseFactor();
+        if (oldRebase == 0) oldRebase = INITIAL_FACTOR;
+        uint256 newRebase = Math.mulDiv(oldRebase, currentSupply + mintAmount, currentSupply);
+        target.applyRebase(newRebase);
+
+        uint256 oldRate = localTokens[communityToken].exchangeRate;
+        uint256 newRate = Math.mulDiv(oldRate, newRebase, oldRebase);
         localTokens[communityToken].exchangeRate = newRate;
+
+        emit TokenSplit(communityToken, mintAmount, oldRate, newRate, oldRebase, newRebase);
     }
 
     function _authorizeUpgrade(address newImplementation) internal virtual override onlyOwner { }
 
     function version() public pure returns (string memory) {
-        return "1.0.14";
+        return "1.0.15";
     }
 }
