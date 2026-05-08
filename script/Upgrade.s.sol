@@ -14,6 +14,10 @@ contract Upgrade is BaseScript {
 
         Options memory opts;
         opts.unsafeSkipStorageCheck = true;
+        // PCECommunityToken legitimately links VoucherSystem/TokenValueOps/ArigatoCreation
+        // (external libraries) since v15. script/upgrade.sh validates linked-library
+        // upgrade safety externally before this script runs.
+        opts.unsafeAllow = "external-library-linking";
 
         Upgrades.upgradeProxy(pceTokenAddress, "PCEToken.sol:PCEToken", "", opts);
         Upgrades.upgradeBeacon(pceCommunityTokenAddress, "PCECommunityToken.sol:PCECommunityToken", opts);
