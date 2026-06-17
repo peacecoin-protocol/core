@@ -141,8 +141,8 @@ contract PCECommunityToken is
         // Apply multiple decay periods via O(log n) exponentiation
         uint256 times = elapsed / decreaseIntervalDays;
         uint256 factor = lastModifiedFactor;
-        uint256 rate = afterDecreaseBp;
-        uint256 base = BP_BASE;
+        uint256 rate = Math.mulDiv(afterDecreaseBp, INITIAL_FACTOR, BP_BASE);
+        uint256 base = INITIAL_FACTOR;
         uint256 n = times;
         while (n > 0) {
             if (n % 2 == 1) {
@@ -795,6 +795,7 @@ contract PCECommunityToken is
         override
         onlyOwner
     {
+        require(_afterDecreaseBp <= BP_BASE, "After decrease bp <= 10000");
         super.setTokenSettings(
             _decreaseIntervalDays,
             _afterDecreaseBp,
@@ -817,6 +818,6 @@ contract PCECommunityToken is
     }
 
     function version() public pure returns (string memory) {
-        return "1.0.16";
+        return "1.0.17";
     }
 }
