@@ -4,6 +4,11 @@ All notable changes to the PCEToken and PCECommunityToken contracts are document
 Version numbering was previously tracked via separate contract files (e.g., PCETokenV2.sol).
 As of v11, a single file per contract is used and versioning is managed through git history.
 
+## v17
+- Fix `PCECommunityToken.getCurrentFactor` so multi-period community-token decay no longer depends on basis-point-truncated batched calculation
+- Evaluate the intermediate decay rate at WAD precision instead of basis-point precision
+- Reject `afterDecreaseBp > 10000` in `PCECommunityToken.setTokenSettings`
+
 ## v12
 - Fix fee drain in `transferFromWithAuthorization` — include fee in allowance check and spend
 - Add zero-amount transfer guard to `transferWithAuthorization` and `transferFromWithAuthorization`

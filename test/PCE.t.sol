@@ -309,6 +309,174 @@ contract PCETest is Test {
         vm.stopPrank();
     }
 
+    function testCommunityTokenDecayUsesWadPrecisionForMultiplePeriods() public {
+        vm.startPrank(owner);
+
+        address[] memory incomeTargetTokens = new address[](0);
+        address[] memory outgoTargetTokens = new address[](0);
+
+        pceToken.createToken(
+            "Weekly Decay Token",
+            "WDT",
+            1000 ether,
+            1 ether,   // 1:1 dilution
+            7,         // decrease interval days
+            9980,      // after decrease bp (99.8%)
+            1000,      // max increase of total supply bp
+            500,       // max increase bp
+            1000,      // max usage bp
+            100,       // change bp
+            ExchangeAllowMethod.All,
+            ExchangeAllowMethod.All,
+            incomeTargetTokens,
+            outgoTargetTokens
+        );
+
+        address[] memory tokens_ = pceToken.getTokens();
+        PCECommunityToken weeklyToken = PCECommunityToken(tokens_[tokens_.length - 1]);
+
+        vm.warp(block.timestamp + 12 * 7 days);
+
+        uint256 currentFactor = weeklyToken.getCurrentFactor();
+        uint256 currentBpBatchedFactor = 976_128_000_000_000_000;
+        uint256 wadFactor = 976_262_247_894_715_033;
+
+        assertEq(currentFactor, wadFactor, "Should match WAD-precision 0.998^12");
+        assertGt(currentFactor, currentBpBatchedFactor, "Should not over-decay with BP-scale squaring");
+
+        vm.stopPrank();
+    }
+
+    function testBatchedDecayMatchesSequentialMaterializationWithinWadRounding() public {
+        vm.startPrank(owner);
+
+        address[] memory incomeTargetTokens = new address[](0);
+        address[] memory outgoTargetTokens = new address[](0);
+
+        pceToken.createToken(
+            "Batched Weekly Decay Token",
+            "BWDT",
+            1000 ether,
+            1 ether,   // 1:1 dilution
+            7,         // decrease interval days
+            9980,      // after decrease bp (99.8%)
+            1000,      // max increase of total supply bp
+            500,       // max increase bp
+            1000,      // max usage bp
+            100,       // change bp
+            ExchangeAllowMethod.All,
+            ExchangeAllowMethod.All,
+            incomeTargetTokens,
+            outgoTargetTokens
+        );
+
+        address[] memory tokensAfterBatch = pceToken.getTokens();
+        PCECommunityToken batchedToken = PCECommunityToken(tokensAfterBatch[tokensAfterBatch.length - 1]);
+
+        pceToken.createToken(
+            "Sequential Weekly Decay Token",
+            "SWDT",
+            1000 ether,
+            1 ether,   // 1:1 dilution
+            7,         // decrease interval days
+            9980,      // after decrease bp (99.8%)
+            1000,      // max increase of total supply bp
+            500,       // max increase bp
+            1000,      // max usage bp
+            100,       // change bp
+            ExchangeAllowMethod.All,
+            ExchangeAllowMethod.All,
+            incomeTargetTokens,
+            outgoTargetTokens
+        );
+
+        address[] memory tokensAfterSequential = pceToken.getTokens();
+        PCECommunityToken sequentialToken = PCECommunityToken(tokensAfterSequential[tokensAfterSequential.length - 1]);
+
+        uint256 startTime = block.timestamp;
+        for (uint256 i = 1; i <= 12; i++) {
+            vm.warp(startTime + i * 7 days);
+            sequentialToken.updateFactorIfNeeded();
+        }
+
+        uint256 batchedFactor = batchedToken.getCurrentFactor();
+        uint256 sequentialFactor = sequentialToken.getCurrentFactor();
+
+        assertApproxEqAbs(
+            batchedFactor,
+            sequentialFactor,
+            10,
+            "Batched and sequential decay should match within WAD rounding"
+        );
+
+        vm.stopPrank();
+    }
+
+    function testSetTokenSettingsRejectsAfterDecreaseAboveBpBase() public {
+        address[] memory incomeTargetTokens = new address[](0);
+        address[] memory outgoTargetTokens = new address[](0);
+
+        vm.expectRevert(bytes("After decrease bp <= 10000"));
+        token.setTokenSettings(
+            1,
+            10_001,
+            1000,
+            500,
+            1000,
+            100,
+            ExchangeAllowMethod.All,
+            ExchangeAllowMethod.All,
+            incomeTargetTokens,
+            outgoTargetTokens
+        );
+    }
+
+    function testCommunityTokenDoesNotDecayWhenIntervalIsZero() public {
+        address[] memory incomeTargetTokens = new address[](0);
+        address[] memory outgoTargetTokens = new address[](0);
+
+        token.setTokenSettings(
+            0,
+            9980,
+            1000,
+            500,
+            1000,
+            100,
+            ExchangeAllowMethod.All,
+            ExchangeAllowMethod.All,
+            incomeTargetTokens,
+            outgoTargetTokens
+        );
+
+        uint256 factorBefore = token.getCurrentFactor();
+        vm.warp(block.timestamp + 365 days);
+
+        assertEq(token.getCurrentFactor(), factorBefore, "Interval 0 should disable decay");
+    }
+
+    function testCommunityTokenFullRetentionDoesNotDecay() public {
+        address[] memory incomeTargetTokens = new address[](0);
+        address[] memory outgoTargetTokens = new address[](0);
+
+        token.setTokenSettings(
+            7,
+            10_000,
+            1000,
+            500,
+            1000,
+            100,
+            ExchangeAllowMethod.All,
+            ExchangeAllowMethod.All,
+            incomeTargetTokens,
+            outgoTargetTokens
+        );
+
+        uint256 factorBefore = token.getCurrentFactor();
+        vm.warp(block.timestamp + 52 * 7 days);
+
+        assertEq(token.getCurrentFactor(), factorBefore, "10000 bp should retain full factor");
+    }
+
     function testNewMintAfterDepreciationShowsCorrectBalance() public {
         vm.startPrank(owner);
 
@@ -352,7 +520,7 @@ contract PCETest is Test {
 
     function testVersion() public view {
         assertEq(pceToken.version(), "1.0.15");
-        assertEq(token.version(), "1.0.16");
+        assertEq(token.version(), "1.0.17");
     }
 
     // --- PIP-16: Owner-controlled token value operations tests ---
