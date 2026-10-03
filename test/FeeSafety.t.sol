@@ -14,6 +14,10 @@ contract FeeSafetyHarness is PCECommunityToken {
         return _collectFeeAsPCE(payer, relayer, fee);
     }
 
+    function setTestFactor(uint256 factor) external onlyOwner {
+        lastModifiedFactor = factor;
+    }
+
     function setTestRebase(uint256 factor) external onlyOwner {
         rebaseFactor = factor;
     }
@@ -55,26 +59,23 @@ contract FeeSafetyTest is Test {
         community.updateFactorIfNeeded();
     }
 
-    function testNonzeroFeeWithZeroRawValueIsRejected() public {
+    function testPositiveDustFeeIsCeiledAndPaidInFull() public {
         community.setTestRebase(2 ether);
-        uint256 reserve = pce.balanceOf(address(pce));
+        assertEq(community.displayBalanceToRawBalance(1), 0);
+        assertEq(community.displayFeeToRawBalance(1), 1 ether);
         uint256 balance = community.balanceOf(address(this));
-        vm.expectRevert("Fee rounds to zero");
-        community.collectTestFee(address(this), RELAYER, 1);
-        assertEq(pce.balanceOf(address(pce)), reserve);
-        assertEq(pce.balanceOf(RELAYER), 0);
-        assertEq(community.balanceOf(address(this)), balance);
+        assertEq(community.collectTestFee(address(this), RELAYER, 1), 1);
+        assertEq(pce.balanceOf(RELAYER), 1);
+        assertEq(balance - community.balanceOf(address(this)), 2);
     }
 
-    function testFeePayoutUsesRoundedBurnValue() public {
+    function testFeePayoutUsesConfiguredValueNotCeilingSurplus() public {
         community.setTestRebase(2 ether);
-        uint256 requested = 3;
-        uint256 raw = community.displayBalanceToRawBalance(requested);
-        uint256 effective = community.rawBalanceToDisplayBalance(raw);
-        assertEq(effective, 2);
-        uint256 amount = community.collectTestFee(address(this), RELAYER, requested);
-        assertEq(amount, effective);
-        assertEq(pce.balanceOf(RELAYER), effective);
+        assertEq(community.displayFeeToRawBalance(3), 2 ether);
+        uint256 balance = community.balanceOf(address(this));
+        assertEq(community.collectTestFee(address(this), RELAYER, 3), 3);
+        assertEq(pce.balanceOf(RELAYER), 3);
+        assertEq(balance - community.balanceOf(address(this)), 4);
     }
 
     function testZeroConfiguredFeeDoesNotBurnOrSwap() public {
@@ -85,23 +86,109 @@ contract FeeSafetyTest is Test {
         assertEq(pce.balanceOf(address(pce)), beforeReserve);
     }
 
-    function testFuzzFeePayoutDoesNotExceedBurnedDisplayValue(uint256 fee, uint256 split) public {
+    function testFuzzFeePayoutCoveredByCeilingBurn(uint256 fee, uint256 rebase) public {
         fee = bound(fee, 1, 10_000);
-        split = bound(split, 2, 1000);
-        community.setTestRebase(split * 1 ether);
-        uint256 raw = community.displayBalanceToRawBalance(fee);
+        rebase = bound(rebase, 1e15, 1000 ether);
+        community.setTestRebase(rebase);
+        uint256 raw = community.displayFeeToRawBalance(fee);
         uint256 effective = community.rawBalanceToDisplayBalance(raw);
-        if (raw == 0 || effective == 0) {
-            vm.expectRevert("Fee rounds to zero");
-            community.collectTestFee(address(this), RELAYER, fee);
-            assertEq(pce.balanceOf(RELAYER), 0);
-        } else {
-            uint256 beforeSupply = community.totalSupply();
-            uint256 amount = community.collectTestFee(address(this), RELAYER, fee);
-            assertLe(effective, fee);
-            assertEq(amount, effective);
-            assertEq(beforeSupply - community.totalSupply(), effective);
-        }
+        assertGe(effective, fee);
+        assertGt(raw, 0);
+        if (raw > 1) assertLt(community.rawBalanceToDisplayBalance(raw - 1), fee);
+        uint256 amount = community.collectTestFee(address(this), RELAYER, fee);
+        assertEq(amount, fee);
+        assertEq(pce.balanceOf(RELAYER), fee);
+    }
+
+    function testFuzzBothCeilingStagesCoverFee(uint256 fee, uint256 rebase, uint256 factor) public {
+        fee = bound(fee, 1, 10_000);
+        rebase = bound(rebase, 1e15, 1000 ether);
+        factor = bound(factor, 1e15, 1 ether);
+        community.setTestRebase(rebase);
+        community.setTestFactor(factor);
+        uint256 raw = community.displayFeeToRawBalance(fee);
+        assertGe(community.rawBalanceToDisplayBalance(raw), fee);
+        assertLt(community.rawBalanceToDisplayBalance(raw - 1), fee);
+    }
+
+    function testDustTransferFromAllowanceCoversCeilingFee() public {
+        _configureDustFee();
+        uint256 pk = 0xFEE3;
+        address spender = vm.addr(pk);
+        address recipient = address(0xCAFE);
+        bytes32 nonce = keccak256("dust-allowance");
+        (uint8 v, bytes32 r, bytes32 sigS) = _signAuthorization(
+            pk,
+            abi.encode(
+                community.TRANSFER_FROM_WITH_AUTHORIZATION_TYPEHASH(),
+                spender,
+                address(this),
+                recipient,
+                uint256(2),
+                uint256(0),
+                type(uint256).max,
+                nonce
+            )
+        );
+        community.approve(spender, 2);
+        uint256 beforeBalance = community.balanceOf(address(this));
+        vm.expectRevert("Insufficient allowance");
+        vm.prank(RELAYER);
+        community.transferFromWithAuthorization(
+            spender, address(this), recipient, 2, 0, type(uint256).max, nonce, v, r, sigS
+        );
+        assertFalse(community.authorizationState(spender, nonce));
+        assertEq(community.balanceOf(address(this)), beforeBalance);
+        assertEq(community.allowance(address(this), spender), 2);
+        community.approve(spender, 4);
+        vm.prank(RELAYER);
+        community.transferFromWithAuthorization(
+            spender, address(this), recipient, 2, 0, type(uint256).max, nonce, v, r, sigS
+        );
+        assertTrue(community.authorizationState(spender, nonce));
+        assertEq(community.allowance(address(this), spender), 0);
+        assertEq(beforeBalance - community.balanceOf(address(this)), 4);
+        assertEq(community.balanceOf(recipient), 2);
+        assertEq(pce.balanceOf(RELAYER), 1);
+    }
+
+    function testRevertedFeeSwapRollsBackApprovalBurnAndNonce() public {
+        uint256 pk = 0xFEE4;
+        address signer = vm.addr(pk);
+        community.transfer(signer, 10 ether);
+        _configureDustFee();
+        bytes32 nonce = keccak256("rollback-approval");
+        (uint8 v, bytes32 r, bytes32 sigS) = _signAuthorization(
+            pk,
+            abi.encode(
+                community.SET_INFINITY_APPROVE_FLAG_WITH_AUTHORIZATION_TYPEHASH(),
+                signer,
+                RELAYER,
+                true,
+                uint256(0),
+                type(uint256).max,
+                nonce
+            )
+        );
+        vm.mockCallRevert(
+            address(pce),
+            abi.encodeWithSelector(PCEToken.swapFeeFromLocalToken.selector, address(community), RELAYER, uint256(1)),
+            abi.encodeWithSignature("Error(string)", "Insufficient deposited PCE token reserve")
+        );
+        uint256 beforeBalance = community.balanceOf(signer);
+        uint256 beforeSupply = community.totalSupply();
+        uint256 beforeReserve = pce.balanceOf(address(pce));
+        vm.expectRevert("Insufficient deposited PCE token reserve");
+        vm.prank(RELAYER);
+        community.setInfinityApproveFlagWithAuthorization(
+            signer, RELAYER, true, 0, type(uint256).max, nonce, v, r, sigS
+        );
+        assertFalse(community.authorizationState(signer, nonce));
+        assertFalse(community.getInfinityApproveFlag(signer, RELAYER));
+        assertEq(community.balanceOf(signer), beforeBalance);
+        assertEq(community.totalSupply(), beforeSupply);
+        assertEq(pce.balanceOf(address(pce)), beforeReserve);
+        assertEq(pce.balanceOf(RELAYER), 0);
     }
 
     function _configureDustFee() internal {
@@ -118,7 +205,7 @@ contract FeeSafetyTest is Test {
         return vm.sign(pk, keccak256(abi.encodePacked("\x19\x01", community.DOMAIN_SEPARATOR(), keccak256(data))));
     }
 
-    function testDustApprovalFeeRevertsWithoutConsumingAuthorization() public {
+    function testDustApprovalFeeIsCollectedAndAuthorizationConsumed() public {
         uint256 pk = 0xFEE1;
         address signer = vm.addr(pk);
         community.transfer(signer, 10 ether);
@@ -138,18 +225,26 @@ contract FeeSafetyTest is Test {
         );
         uint256 beforeBalance = community.balanceOf(signer);
         vm.prank(RELAYER);
-        vm.expectRevert("Fee rounds to zero");
         community.setInfinityApproveFlagWithAuthorization(
             signer, RELAYER, true, 0, type(uint256).max, nonce, v, r, sigS
         );
-        assertFalse(community.authorizationState(signer, nonce));
-        assertFalse(community.getInfinityApproveFlag(signer, RELAYER));
-        assertEq(community.balanceOf(signer), beforeBalance);
-        assertEq(pce.balanceOf(RELAYER), 0);
+        assertTrue(community.authorizationState(signer, nonce));
+        assertTrue(community.getInfinityApproveFlag(signer, RELAYER));
+        assertEq(beforeBalance - community.balanceOf(signer), 2);
+        assertEq(pce.balanceOf(RELAYER), 1);
     }
 
-    function testVoucherDustFeeIsWaivedWithoutPCEPayout() public {
+    function testVoucherDustFeeIsWithheldAndPaidInFull() public {
+        _claimVoucherFee(false);
+    }
+
+    function testVoucherZeroConfiguredFeeRemainsFree() public {
+        _claimVoucherFee(true);
+    }
+
+    function _claimVoucherFee(bool zeroFee) internal {
         _configureDustFee();
+        if (zeroFee) pce.setMetaTransactionGas(0);
         uint256 pk = 0xFEE2;
         address signer = vm.addr(pk);
         string memory code = "DUST-VOUCHER";
@@ -175,8 +270,8 @@ contract FeeSafetyTest is Test {
         community.claimVoucherWithAuthorization(
             signer, "DUST001", code, new bytes32[](0), 0, type(uint256).max, nonce, v, r, sigS
         );
-        assertEq(community.balanceOf(signer), 10 ether);
-        assertEq(pce.balanceOf(RELAYER), 0);
-        assertEq(pce.balanceOf(address(pce)), beforeReserve);
+        assertEq(community.balanceOf(signer), zeroFee ? 10 ether : 10 ether - 2);
+        assertEq(pce.balanceOf(RELAYER), zeroFee ? 0 : 1);
+        assertEq(pce.balanceOf(address(pce)), zeroFee ? beforeReserve : beforeReserve - 1);
     }
 }

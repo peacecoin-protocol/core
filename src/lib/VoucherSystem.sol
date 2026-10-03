@@ -11,6 +11,7 @@ interface IVoucherHost {
     function __libCollectFeeAsPCE(address from, address relayer, uint256 displayFee) external;
     function balanceOf(address account) external view returns (uint256);
     function displayBalanceToRawBalance(uint256 displayBalance) external view returns (uint256);
+    function displayFeeToRawBalance(uint256 displayFee) external view returns (uint256);
     function getMetaTransactionFee() external view returns (uint256);
     function DOMAIN_SEPARATOR() external view returns (bytes32);
 }
@@ -39,7 +40,7 @@ library VoucherSystem {
         uint256 endTime;
         bytes32 merkleRoot;
         bool isActive;
-        string ipfsCid;  // Optional IPFS CID for additional metadata
+        string ipfsCid; // Optional IPFS CID for additional metadata
     }
 
     struct VoucherStorage {
@@ -79,7 +80,6 @@ library VoucherSystem {
     /// @dev Matches the EIP3009 event signature so observers cannot distinguish
     ///      whether the host or this library emitted it.
     event AuthorizationUsed(address indexed authorizer, bytes32 indexed nonce);
-
 
     function registerIssuance(
         VoucherStorage storage self,
@@ -154,12 +154,20 @@ library VoucherSystem {
         require(issuance.endTime == 0 || block.timestamp < issuance.endTime, "Issuance already ended");
 
         // Check claim count limit per user (0 means unlimited)
-        require(issuance.countLimitPerUser == 0 || self.claimCountPerUser[issuanceId][claimer] < issuance.countLimitPerUser, "Claim count reached limitation");
+        require(
+            issuance.countLimitPerUser == 0 || self.claimCountPerUser[issuanceId][claimer] < issuance.countLimitPerUser,
+            "Claim count reached limitation"
+        );
         require(self.remainingRawAmount[issuanceId] >= claimRawAmount, "No more claimable amount");
         if (issuance.totalAmountLimit > 0) {
-            require(self.claimedDisplayAmount[issuanceId] + issuance.amountPerClaim <= issuance.totalAmountLimit, "Total amount limit exceeded");
+            require(
+                self.claimedDisplayAmount[issuanceId] + issuance.amountPerClaim <= issuance.totalAmountLimit,
+                "Total amount limit exceeded"
+            );
         }
-        require(MerkleProof.verify(proof, issuance.merkleRoot, keccak256(abi.encodePacked(code))), "Invalid claim proof");
+        require(
+            MerkleProof.verify(proof, issuance.merkleRoot, keccak256(abi.encodePacked(code))), "Invalid claim proof"
+        );
         require(!self.isCodeUsed[issuanceId][code], "Code already used");
 
         self.claimCountPerUser[issuanceId][claimer]++;
@@ -323,7 +331,9 @@ library VoucherSystem {
         }
 
         // Check claim count limit per user (0 means unlimited)
-        if (issuance.countLimitPerUser != 0 && self.claimCountPerUser[issuanceId][claimer] >= issuance.countLimitPerUser) {
+        if (
+            issuance.countLimitPerUser != 0 && self.claimCountPerUser[issuanceId][claimer] >= issuance.countLimitPerUser
+        ) {
             return (false, ERROR_CLAIM_LIMIT_REACHED);
         }
 
@@ -376,8 +386,18 @@ library VoucherSystem {
         uint256 initialFundsRawAmount = host.displayBalanceToRawBalance(initialFundsDisplayAmount);
 
         registerIssuance(
-            self, issuanceId, name, amountPerClaim, countLimitPerUser, totalAmountLimit,
-            initialFundsRawAmount, startTime, endTime, merkleRoot, sender, ipfsCid
+            self,
+            issuanceId,
+            name,
+            amountPerClaim,
+            countLimitPerUser,
+            totalAmountLimit,
+            initialFundsRawAmount,
+            startTime,
+            endTime,
+            merkleRoot,
+            sender,
+            ipfsCid
         );
 
         host.__libTransfer(sender, address(this), initialFundsRawAmount);
@@ -427,8 +447,12 @@ library VoucherSystem {
         {
             bytes memory data = abi.encode(
                 CLAIM_WITH_AUTHORIZATION_TYPEHASH,
-                claimer, keccak256(bytes(issuanceId)), keccak256(bytes(code)),
-                validAfter, validBefore, nonce
+                claimer,
+                keccak256(bytes(issuanceId)),
+                keccak256(bytes(code)),
+                validAfter,
+                validBefore,
+                nonce
             );
             digest = keccak256(abi.encodePacked("\x19\x01", host.DOMAIN_SEPARATOR(), keccak256(data)));
         }
@@ -441,20 +465,16 @@ library VoucherSystem {
         require(bytes(self.issuances[issuanceId].issuanceId).length != 0, "Issuance not found");
 
         uint256 displayFee = host.getMetaTransactionFee();
-        uint256 rawFee = host.displayBalanceToRawBalance(displayFee);
+        uint256 rawFee = host.displayFeeToRawBalance(displayFee);
         uint256 rawClaimAmount = host.displayBalanceToRawBalance(self.issuances[issuanceId].amountPerClaim);
         require(!(rawClaimAmount <= rawFee), "Claim amount must be greater than fee");
 
         claim(self, issuanceId, code, proof, claimer, rawClaimAmount);
 
         host.__libTransfer(address(this), claimer, rawClaimAmount - rawFee);
-        // When `displayFee` rounds down to `rawFee == 0` (e.g. extreme
-        // rebase factor), we didn't actually withhold anything from the
-        // claimer, so skip the PCE swap to avoid paying the relayer out of
-        // the PCE reserve without a matching CT burn.
-        if (rawFee > 0) {
-            host.__libCollectFeeAsPCE(address(this), relayer, displayFee);
-        }
+        // Every positive configured fee is withheld with ceiling rounding and
+        // paid in full; zero configured fees remain free.
+        host.__libCollectFeeAsPCE(address(this), relayer, displayFee);
     }
 
     function addFundsWithTransfer(
@@ -488,12 +508,7 @@ library VoucherSystem {
         host.__libTransfer(address(this), sender, withdrawnRawAmount);
     }
 
-    function terminateWithRefund(
-        VoucherStorage storage self,
-        string memory issuanceId
-    )
-        public
-    {
+    function terminateWithRefund(VoucherStorage storage self, string memory issuanceId) public {
         IVoucherHost host = IVoucherHost(address(this));
         address sender = msg.sender;
 

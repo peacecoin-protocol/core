@@ -342,6 +342,8 @@ contract PCEToken is
 
         PCECommunityToken target = PCECommunityToken(fromToken);
 
+        // Intentional: relayer fee conversion is exempt from ordinary daily
+        // community/personal swap limits, including paid voucher onboarding.
         uint256 pcetokenAmount = Math.mulDiv(
             Math.mulDiv(communityTokenDisplayAmount, INITIAL_FACTOR, localTokens[fromToken].exchangeRate),
             lastModifiedFactor,

@@ -206,6 +206,19 @@ contract PCECommunityToken is
         return Math.mulDiv(display, initialFactor * initialFactor, currentFactor);
     }
 
+    /// @notice Raw fee sufficient to cover the configured display fee.
+    /// @dev Reverse both display conversion stages with ceiling rounding. Normal
+    /// transfer conversion remains unchanged; the rounding surplus is burned.
+    function displayFeeToRawBalance(uint256 displayFee) public view returns (uint256) {
+        uint256 currentFactor = getCurrentFactor();
+        if (currentFactor < 1) currentFactor = 1;
+        uint256 display = displayFee;
+        if (rebaseFactor != 0 && rebaseFactor != INITIAL_FACTOR) {
+            display = Math.mulDiv(displayFee, INITIAL_FACTOR, rebaseFactor, Math.Rounding.Ceil);
+        }
+        return Math.mulDiv(display, initialFactor * initialFactor, currentFactor, Math.Rounding.Ceil);
+    }
+
     function totalSupply() public view override returns (uint256) {
         return rawBalanceToDisplayBalance(super.totalSupply());
     }
@@ -464,16 +477,13 @@ contract PCECommunityToken is
         // meta-tx / voucher flows.
         if (displayFee == 0) return 0;
 
-        uint256 rawFee = displayBalanceToRawBalance(displayFee);
-        require(rawFee > 0, "Fee rounds to zero");
-        // Swap only the display value represented by the raw tokens actually burned.
-        uint256 collectedDisplayFee = rawBalanceToDisplayBalance(rawFee);
-        require(collectedDisplayFee > 0, "Fee rounds to zero");
+        uint256 rawFee = displayFeeToRawBalance(displayFee);
         _burn(from, rawFee);
         PCEToken pceToken = PCEToken(pceAddress);
-        uint256 pceAmount = pceToken.swapFeeFromLocalToken(address(this), relayer, collectedDisplayFee);
-        emit MetaTransactionFeeCollected(from, relayer, collectedDisplayFee, rawFee);
-        emit MetaTransactionFeeSwapped(from, relayer, collectedDisplayFee, pceAmount);
+        // Pay the configured fee, not the slightly larger ceiling-rounded burn value.
+        uint256 pceAmount = pceToken.swapFeeFromLocalToken(address(this), relayer, displayFee);
+        emit MetaTransactionFeeCollected(from, relayer, displayFee, rawFee);
+        emit MetaTransactionFeeSwapped(from, relayer, displayFee, pceAmount);
         return pceAmount;
     }
 
@@ -528,7 +538,7 @@ contract PCECommunityToken is
         uint256 rawBalance = super.balanceOf(from);
         uint256 rawAmount = displayBalanceToRawBalance(displayAmount);
         uint256 displayFee = getMetaTransactionFee();
-        uint256 rawFee = displayBalanceToRawBalance(displayFee);
+        uint256 rawFee = displayFeeToRawBalance(displayFee);
 
         require(rawAmount > 0, "Amount must be greater than zero");
         require(rawBalance >= (rawAmount + rawFee), "Insufficient balance");
@@ -666,7 +676,7 @@ contract PCECommunityToken is
         require(spender != address(0), "Invalid spender address");
 
         uint256 displayFee = getMetaTransactionFee();
-        uint256 rawFee = displayBalanceToRawBalance(displayFee);
+        uint256 rawFee = displayFeeToRawBalance(displayFee);
         require(super.balanceOf(owner) >= rawFee, "Insufficient balance");
 
         _useAuthorization(

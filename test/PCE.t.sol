@@ -852,10 +852,10 @@ contract PCETest is Test {
 
         token.updateFactorIfNeeded();
         uint256 displayFee = token.getMetaTransactionFee();
-        uint256 rawFee = token.displayBalanceToRawBalance(displayFee);
+        uint256 rawFee = token.displayFeeToRawBalance(displayFee);
 
         vm.expectEmit(true, true, false, true);
-        emit PCECommunityToken.MetaTransactionFeeCollected(signer, relayer, token.rawBalanceToDisplayBalance(rawFee), rawFee);
+        emit PCECommunityToken.MetaTransactionFeeCollected(signer, relayer, displayFee, rawFee);
 
         // Execute as relayer
         vm.prank(relayer);
