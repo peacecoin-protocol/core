@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: MIT
 pragma solidity 0.8.30;
 
-import {Ownable} from "@openzeppelin/contracts/access/Ownable.sol";
-import {TimelockController} from "@openzeppelin/contracts/governance/TimelockController.sol";
+import { Ownable } from "@openzeppelin/contracts/access/Ownable.sol";
+import { TimelockController } from "@openzeppelin/contracts/governance/TimelockController.sol";
 
 interface IWormholeReceiver {
     struct Signature {
@@ -27,7 +27,9 @@ interface IWormholeReceiver {
     }
 
     function parseAndVerifyVM(bytes calldata encodedVM)
-        external view returns (VM memory vm, bool valid, string memory reason);
+        external
+        view
+        returns (VM memory vm, bool valid, string memory reason);
 }
 
 /**
@@ -63,15 +65,13 @@ contract GovernanceReceiver is Ownable {
     /// @notice Emergency guardian for fast cancellation
     address public emergencyGuardian;
 
-    /// @notice Next minimum sequence number (monotonically increasing, replay protection)
+    /// @notice Deprecated sequence high-water mark; not an acceptance threshold.
     uint64 public nextMinimumSequence;
 
-    event CrossChainGovernanceReceived(
-        uint64 indexed sequence,
-        address[] targets,
-        uint256[] values,
-        bytes32 salt
-    );
+    /// @notice Replay protection scoped to the authenticated emitter and sequence.
+    mapping(bytes32 emitter => mapping(uint64 sequence => bool used)) public processedMessages;
+
+    event CrossChainGovernanceReceived(uint64 indexed sequence, address[] targets, uint256[] values, bytes32 salt);
     event GovernanceSenderUpdated(bytes32 indexed oldSender, bytes32 indexed newSender);
     event EmergencyGuardianUpdated(address indexed oldGuardian, address indexed newGuardian);
 
@@ -82,7 +82,8 @@ contract GovernanceReceiver is Ownable {
     error InvalidVAA(string reason);
     error InvalidEmitterChain(uint16 chainId);
     error InvalidEmitterAddress(bytes32 emitterAddress);
-    error InvalidSequence(uint64 sequence, uint64 minimum);
+    error InvalidSequence(uint64 sequence, uint64 minimum); // Retained ABI; no longer used.
+    error MessageAlreadyProcessed(bytes32 emitter, uint64 sequence);
     error MessageExpired(uint32 timestamp);
     error InvalidDestination();
     error NotOwnerOrGuardian();
@@ -93,11 +94,7 @@ contract GovernanceReceiver is Ownable {
      * @param _timelock Address of the Polygon TimelockController
      * @param _owner Initial owner (deployer)
      */
-    constructor(
-        address _wormhole,
-        address _timelock,
-        address _owner
-    ) Ownable(_owner) {
+    constructor(address _wormhole, address _timelock, address _owner) Ownable(_owner) {
         if (_wormhole == address(0) || _wormhole.code.length == 0) revert InvalidWormhole();
         if (_timelock == address(0) || _timelock.code.length == 0) revert InvalidTimelock();
 
@@ -108,7 +105,7 @@ contract GovernanceReceiver is Ownable {
     /**
      * @notice Receive and process a Wormhole VAA containing a governance proposal
      * @dev Anyone can call this — the VAA's Guardian signatures guarantee authenticity.
-     *      Sequence numbers must be monotonically increasing (replay protection).
+     *      Each emitter/sequence is accepted once, including out-of-order delivery.
      * @param whMessage The encoded Wormhole VAA
      */
     function receiveMessage(bytes calldata whMessage) external {
@@ -123,9 +120,14 @@ contract GovernanceReceiver is Ownable {
         if (vm.emitterChainId != SOURCE_CHAIN) revert InvalidEmitterChain(vm.emitterChainId);
         if (vm.emitterAddress != governanceSender) revert InvalidEmitterAddress(vm.emitterAddress);
 
-        // Sequence must be monotonically increasing (replay protection)
-        if (vm.sequence < nextMinimumSequence) revert InvalidSequence(vm.sequence, nextMinimumSequence);
-        nextMinimumSequence = vm.sequence + 1;
+        if (processedMessages[vm.emitterAddress][vm.sequence]) {
+            revert MessageAlreadyProcessed(vm.emitterAddress, vm.sequence);
+        }
+        processedMessages[vm.emitterAddress][vm.sequence] = true;
+        // Preserve the legacy getter for observers without gating message delivery.
+        if (vm.sequence >= nextMinimumSequence) {
+            nextMinimumSequence = vm.sequence == type(uint64).max ? vm.sequence : vm.sequence + 1;
+        }
 
         // Check message is still valid (within timeout)
         if (vm.timestamp + MESSAGE_TIMEOUT < block.timestamp) revert MessageExpired(vm.timestamp);
@@ -190,7 +192,7 @@ contract GovernanceReceiver is Ownable {
      */
     function withdrawETH(address payable to, uint256 amount) external onlyOwner {
         if (to == address(0)) revert WithdrawFailed();
-        (bool success,) = to.call{value: amount}("");
+        (bool success,) = to.call{ value: amount }("");
         if (!success) revert WithdrawFailed();
     }
 }

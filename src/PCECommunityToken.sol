@@ -4,7 +4,8 @@ pragma solidity 0.8.30;
 import { ERC20Upgradeable } from "@openzeppelin/contracts-upgradeable/token/ERC20/ERC20Upgradeable.sol";
 import { Initializable } from "@openzeppelin/contracts-upgradeable/proxy/utils/Initializable.sol";
 import { OwnableUpgradeable } from "@openzeppelin/contracts-upgradeable/access/OwnableUpgradeable.sol";
-import { ERC20PermitUpgradeable } from "@openzeppelin/contracts-upgradeable/token/ERC20/extensions/ERC20PermitUpgradeable.sol";
+import { ERC20PermitUpgradeable } from
+    "@openzeppelin/contracts-upgradeable/token/ERC20/extensions/ERC20PermitUpgradeable.sol";
 import { PCEToken } from "./PCEToken.sol";
 import { EIP3009 } from "./lib/EIP3009.sol";
 import { ECRecover } from "./lib/ECRecover.sol";
@@ -107,7 +108,9 @@ contract PCECommunityToken is
     event PCETransfer(address indexed from, address indexed to, uint256 displayAmount, uint256 rawAmount);
     event MintArigatoCreation(address indexed to, uint256 displayAmount, uint256 rawAmount);
     event MetaTransactionFeeCollected(address indexed from, address indexed to, uint256 displayFee, uint256 rawFee);
-    event MetaTransactionFeeSwapped(address indexed from, address indexed relayer, uint256 communityTokenFee, uint256 pceFee);
+    event MetaTransactionFeeSwapped(
+        address indexed from, address indexed relayer, uint256 communityTokenFee, uint256 pceFee
+    );
     event InfinityApproveFlagSet(address indexed owner, address indexed spender, bool flag);
 
     function initialize(string memory name, string memory symbol, uint256 _initialFactor) public initializer {
@@ -381,13 +384,23 @@ contract PCECommunityToken is
 
     function isAllowOutgoExchange(address tokenAddress) public view returns (bool) {
         return TokenValueOps.isAllowExchange(
-            false, tokenAddress, incomeExchangeAllowMethod, outgoExchangeAllowMethod, incomeTargetTokens, outgoTargetTokens
+            false,
+            tokenAddress,
+            incomeExchangeAllowMethod,
+            outgoExchangeAllowMethod,
+            incomeTargetTokens,
+            outgoTargetTokens
         );
     }
 
     function isAllowIncomeExchange(address tokenAddress) public view returns (bool) {
         return TokenValueOps.isAllowExchange(
-            true, tokenAddress, incomeExchangeAllowMethod, outgoExchangeAllowMethod, incomeTargetTokens, outgoTargetTokens
+            true,
+            tokenAddress,
+            incomeExchangeAllowMethod,
+            outgoExchangeAllowMethod,
+            incomeTargetTokens,
+            outgoTargetTokens
         );
     }
 
@@ -416,9 +429,7 @@ contract PCECommunityToken is
     function getMetaTransactionFeeWithBaseFee(uint256 _baseFee) public view returns (uint256) {
         PCEToken pceToken = PCEToken(pceAddress);
         return Math.mulDiv(
-            pceToken.getMetaTransactionFeeWithBaseFee(_baseFee),
-            pceToken.getSwapRate(address(this)),
-            2**96
+            pceToken.getMetaTransactionFeeWithBaseFee(_baseFee), pceToken.getSwapRate(address(this)), 2 ** 96
         );
     }
 
@@ -454,16 +465,28 @@ contract PCECommunityToken is
         if (displayFee == 0) return 0;
 
         uint256 rawFee = displayBalanceToRawBalance(displayFee);
+        require(rawFee > 0, "Fee rounds to zero");
+        // Swap only the display value represented by the raw tokens actually burned.
+        uint256 collectedDisplayFee = rawBalanceToDisplayBalance(rawFee);
+        require(collectedDisplayFee > 0, "Fee rounds to zero");
         _burn(from, rawFee);
         PCEToken pceToken = PCEToken(pceAddress);
-        uint256 pceAmount = pceToken.swapFeeFromLocalToken(address(this), relayer, displayFee);
-        emit MetaTransactionFeeCollected(from, relayer, displayFee, rawFee);
-        emit MetaTransactionFeeSwapped(from, relayer, displayFee, pceAmount);
+        uint256 pceAmount = pceToken.swapFeeFromLocalToken(address(this), relayer, collectedDisplayFee);
+        emit MetaTransactionFeeCollected(from, relayer, collectedDisplayFee, rawFee);
+        emit MetaTransactionFeeSwapped(from, relayer, collectedDisplayFee, pceAmount);
         return pceAmount;
     }
 
     function transferWithAuthorization(
-        address from, address to, uint256 displayAmount, uint256 validAfter, uint256 validBefore, bytes32 nonce, uint8 v, bytes32 r, bytes32 s
+        address from,
+        address to,
+        uint256 displayAmount,
+        uint256 validAfter,
+        uint256 validBefore,
+        bytes32 nonce,
+        uint8 v,
+        bytes32 r,
+        bytes32 s
     )
         public
         override
@@ -483,7 +506,16 @@ contract PCECommunityToken is
     }
 
     function transferFromWithAuthorization(
-        address spender, address from, address to, uint256 displayAmount, uint256 validAfter, uint256 validBefore, bytes32 nonce, uint8 v, bytes32 r, bytes32 s
+        address spender,
+        address from,
+        address to,
+        uint256 displayAmount,
+        uint256 validAfter,
+        uint256 validBefore,
+        bytes32 nonce,
+        uint8 v,
+        bytes32 r,
+        bytes32 s
     )
         public
     {
@@ -501,20 +533,30 @@ contract PCECommunityToken is
         require(rawAmount > 0, "Amount must be greater than zero");
         require(rawBalance >= (rawAmount + rawFee), "Insufficient balance");
         require(
-            _infinityApproveFlags[from][spender]
-                || super.allowance(from, spender) >= (rawAmount + rawFee),
+            _infinityApproveFlags[from][spender] || super.allowance(from, spender) >= (rawAmount + rawFee),
             "Insufficient allowance"
         );
 
-        _useAuthorization(spender,
+        _useAuthorization(
+            spender,
             validAfter,
             validBefore,
             nonce,
-            _digest(abi.encode(
-                TRANSFER_FROM_WITH_AUTHORIZATION_TYPEHASH,
-                spender, from, to, displayAmount, validAfter, validBefore, nonce
-            )),
-            v, r, s
+            _digest(
+                abi.encode(
+                    TRANSFER_FROM_WITH_AUTHORIZATION_TYPEHASH,
+                    spender,
+                    from,
+                    to,
+                    displayAmount,
+                    validAfter,
+                    validBefore,
+                    nonce
+                )
+            ),
+            v,
+            r,
+            s
         );
 
         if (!_infinityApproveFlags[from][spender]) {
@@ -587,7 +629,10 @@ contract PCECommunityToken is
     function getRemainingSwapableToPCEBalanceForIndividual(address account) public view returns (uint256) {
         uint256 limit = getTodaySwapableToPCEBalanceForIndividual(account);
         uint256 used = swappedToPCETodayByAddress[account];
-        if (swappedToPCETodayByAddressModifiedTime[account] == 0 || intervalDaysOf(swappedToPCETodayByAddressModifiedTime[account], block.timestamp, 1)) {
+        if (
+            swappedToPCETodayByAddressModifiedTime[account] == 0
+                || intervalDaysOf(swappedToPCETodayByAddressModifiedTime[account], block.timestamp, 1)
+        ) {
             used = 0;
         }
         return limit > used ? limit - used : 0;
@@ -603,7 +648,15 @@ contract PCECommunityToken is
     }
 
     function setInfinityApproveFlagWithAuthorization(
-        address owner, address spender, bool flag, uint256 validAfter, uint256 validBefore, bytes32 nonce, uint8 v, bytes32 r, bytes32 s
+        address owner,
+        address spender,
+        bool flag,
+        uint256 validAfter,
+        uint256 validBefore,
+        bytes32 nonce,
+        uint8 v,
+        bytes32 r,
+        bytes32 s
     )
         public
     {
@@ -616,15 +669,25 @@ contract PCECommunityToken is
         uint256 rawFee = displayBalanceToRawBalance(displayFee);
         require(super.balanceOf(owner) >= rawFee, "Insufficient balance");
 
-        _useAuthorization(owner,
+        _useAuthorization(
+            owner,
             validAfter,
             validBefore,
             nonce,
-            _digest(abi.encode(
-                SET_INFINITY_APPROVE_FLAG_WITH_AUTHORIZATION_TYPEHASH,
-                owner, spender, flag, validAfter, validBefore, nonce
-            )),
-            v, r, s
+            _digest(
+                abi.encode(
+                    SET_INFINITY_APPROVE_FLAG_WITH_AUTHORIZATION_TYPEHASH,
+                    owner,
+                    spender,
+                    flag,
+                    validAfter,
+                    validBefore,
+                    nonce
+                )
+            ),
+            v,
+            r,
+            s
         );
 
         _infinityApproveFlags[owner][spender] = flag;
@@ -720,11 +783,7 @@ contract PCECommunityToken is
         );
     }
 
-    function getVoucherIssuanceInfo(string memory issuanceId)
-        external
-        view
-        returns (VoucherIssuanceInfo memory)
-    {
+    function getVoucherIssuanceInfo(string memory issuanceId) external view returns (VoucherIssuanceInfo memory) {
         VoucherSystem.VoucherIssuance memory issuance = VoucherSystem.getIssuance(_voucherStorage, issuanceId);
         (uint256 remainingRawAmount, uint256 claimedRawAmount, uint256 claimedDisplayAmount, uint256 totalClaimCount) =
             VoucherSystem.getFundsInfo(_voucherStorage, issuanceId);
@@ -818,6 +877,6 @@ contract PCECommunityToken is
     }
 
     function version() public pure returns (string memory) {
-        return "1.0.17";
+        return "1.0.18";
     }
 }

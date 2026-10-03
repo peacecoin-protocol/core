@@ -1,20 +1,12 @@
 // SPDX-License-Identifier: MIT
 pragma solidity 0.8.30;
 
-import { GovernorUpgradeable } from "@openzeppelin/contracts-upgradeable/governance/GovernorUpgradeable.sol";
-import { GovernorCountingSimpleUpgradeable } from
-    "@openzeppelin/contracts-upgradeable/governance/extensions/GovernorCountingSimpleUpgradeable.sol";
-import {
-    GovernorVotesUpgradeable,
-    IVotes
-} from "@openzeppelin/contracts-upgradeable/governance/extensions/GovernorVotesUpgradeable.sol";
-import {
-    GovernorTimelockControlUpgradeable,
-    TimelockControllerUpgradeable
-} from "@openzeppelin/contracts-upgradeable/governance/extensions/GovernorTimelockControlUpgradeable.sol";
-import { UUPSUpgradeable } from "@openzeppelin/contracts-upgradeable/proxy/utils/UUPSUpgradeable.sol";
-import { IERC20 } from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
-import { Checkpoints } from "@openzeppelin/contracts/utils/structs/Checkpoints.sol";
+import "@openzeppelin/contracts-upgradeable/governance/GovernorUpgradeable.sol";
+import "@openzeppelin/contracts-upgradeable/governance/extensions/GovernorCountingSimpleUpgradeable.sol";
+import "@openzeppelin/contracts-upgradeable/governance/extensions/GovernorVotesUpgradeable.sol";
+import "@openzeppelin/contracts-upgradeable/governance/extensions/GovernorVotesQuorumFractionUpgradeable.sol";
+import "@openzeppelin/contracts-upgradeable/governance/extensions/GovernorTimelockControlUpgradeable.sol";
+import "@openzeppelin/contracts-upgradeable/proxy/utils/UUPSUpgradeable.sol";
 
 /**
  * @title PCEGovernor
@@ -26,23 +18,17 @@ import { Checkpoints } from "@openzeppelin/contracts/utils/structs/Checkpoints.s
  * - Executing approved proposals after timelock
  * - Compatible with Tally interface
  */
-contract PCEGovernor is
+contract LegacyPercentageGovernor is
     GovernorUpgradeable,
     GovernorCountingSimpleUpgradeable,
     GovernorVotesUpgradeable,
+    GovernorVotesQuorumFractionUpgradeable,
     GovernorTimelockControlUpgradeable,
     UUPSUpgradeable
 {
-    /// @custom:storage-location erc7201:openzeppelin.storage.GovernorVotesQuorumFraction
-    struct DeprecatedQuorumFractionStorage {
-        Checkpoints.Trace208 _quorumNumeratorHistory;
-    }
-
     uint256 private _votingDelay;
     uint256 private _votingPeriod;
     uint256 private _proposalThreshold;
-    IERC20 private _quorumSupplyToken;
-    uint256 private _absoluteQuorum;
     /// @custom:oz-upgrades-unsafe-allow constructor
 
     constructor() {
@@ -56,8 +42,7 @@ contract PCEGovernor is
         uint256 _vDelay,
         uint256 _vPeriod,
         uint256 _pThreshold,
-        address _quorumToken,
-        uint256 _absoluteQuorumValue
+        uint256 _quorumPercentage
     )
         public
         initializer
@@ -65,26 +50,12 @@ contract PCEGovernor is
         __Governor_init(_name);
         __GovernorCountingSimple_init();
         __GovernorVotes_init(IVotes(_token));
+        __GovernorVotesQuorumFraction_init(_quorumPercentage); // 4% quorum
         __GovernorTimelockControl_init(TimelockControllerUpgradeable(payable(_timelock)));
 
         _votingDelay = _vDelay;
         _votingPeriod = _vPeriod;
         _proposalThreshold = _pThreshold;
-        require(_quorumToken != address(0), "Invalid quorum token");
-        _quorumSupplyToken = IERC20(_quorumToken);
-        require(_absoluteQuorumValue > 0, "Invalid absolute quorum");
-        _absoluteQuorum = _absoluteQuorumValue;
-    }
-
-    /// @notice Configure absolute quorum while upgrading a legacy percentage-quorum proxy.
-    /// @dev Must be included in the timelock's upgradeToAndCall payload.
-    function initializeAbsoluteQuorum(address quorumToken, uint256 quorumValue) external onlyProxy reinitializer(2) {
-        require(_executor() == _msgSender(), "Only timelock");
-        require(_absoluteQuorum == 0, "Absolute quorum already configured");
-        require(quorumToken != address(0), "Invalid quorum token");
-        require(quorumValue > 0, "Invalid absolute quorum");
-        _quorumSupplyToken = IERC20(quorumToken);
-        _absoluteQuorum = quorumValue;
     }
 
     // Required overrides
@@ -97,14 +68,13 @@ contract PCEGovernor is
         return _votingPeriod;
     }
 
-    function quorum(uint256) public view override(GovernorUpgradeable) returns (uint256) {
-        // Absolute quorum in token units (18 decimals). Ignores percentage-based calculation.
-        require(_absoluteQuorum > 0, "Absolute quorum not configured");
-        return _absoluteQuorum;
-    }
-
-    function absoluteQuorum() public view returns (uint256) {
-        return _absoluteQuorum;
+    function quorum(uint256 blockNumber)
+        public
+        view
+        override(GovernorUpgradeable, GovernorVotesQuorumFractionUpgradeable)
+        returns (uint256)
+    {
+        return super.quorum(blockNumber);
     }
 
     function state(uint256 proposalId)
