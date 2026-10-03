@@ -41,6 +41,8 @@ contract NativeMetaTransaction is EIP712Base {
         payable
         returns (bytes memory)
     {
+        require(getDomainSeperator() != bytes32(0), "NativeMetaTransaction: DOMAIN_NOT_INITIALIZED");
+
         MetaTransaction memory metaTx =
             MetaTransaction({ nonce: nonces[userAddress], from: userAddress, functionSignature: functionSignature });
 

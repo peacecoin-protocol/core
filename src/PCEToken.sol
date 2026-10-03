@@ -12,6 +12,7 @@ import { PCECommunityToken } from "./PCECommunityToken.sol";
 import { Utils } from "./lib/Utils.sol";
 import { ExchangeAllowMethod } from "./lib/Enum.sol";
 import { NativeMetaTransaction } from "./lib/polygon/NativeMetaTransaction.sol";
+import { ContextMixin } from "./lib/polygon/ContextMixin.sol";
 import { Math } from "@openzeppelin/contracts/utils/math/Math.sol";
 
 contract PCEToken is
@@ -20,7 +21,8 @@ contract PCEToken is
     ERC20Upgradeable,
     OwnableUpgradeable,
     ERC20BurnableUpgradeable,
-    NativeMetaTransaction
+    NativeMetaTransaction,
+    ContextMixin
 {
     uint160 public nativeTokenToPceTokenRate;
     uint256 public metaTransactionGas;
@@ -83,6 +85,18 @@ contract PCEToken is
 
     function getLocalToken(address communityToken) public view returns (Utils.LocalToken memory) {
         return localTokens[communityToken];
+    }
+
+    /// @notice Initialize the native meta-transaction domain on a legacy proxy.
+    /// @dev Call atomically with the upgrade when the existing domain is zero.
+    /// Uses the existing Polygon initialization flag without resetting nonces.
+    function initializeNativeMetaTransaction() external onlyProxy onlyOwner {
+        require(getDomainSeperator() == bytes32(0), "NativeMetaTransaction: DOMAIN_ALREADY_INITIALIZED");
+        _initializeEIP712(name());
+    }
+
+    function _msgSender() internal view override returns (address) {
+        return ContextMixin.msgSender();
     }
 
     function getCurrentFactor() public view returns (uint256) {
@@ -183,12 +197,7 @@ contract PCEToken is
 
         BeaconProxy proxy = new BeaconProxy(
             _communityTokenAddress,
-            abi.encodeWithSelector(
-                PCECommunityToken(address(0)).initialize.selector,
-                name,
-                symbol,
-                lastModifiedFactor
-            )
+            abi.encodeWithSelector(PCECommunityToken(address(0)).initialize.selector, name, symbol, lastModifiedFactor)
         );
         address newTokenAddress = address(proxy);
         PCECommunityToken newToken = PCECommunityToken(newTokenAddress);
@@ -235,9 +244,7 @@ contract PCEToken is
         PCECommunityToken target = PCECommunityToken(toToken);
 
         return Math.mulDiv(
-            localTokens[toToken].exchangeRate * Q96,
-            target.getCurrentFactor(),
-            INITIAL_FACTOR * getCurrentFactor()
+            localTokens[toToken].exchangeRate * Q96, target.getCurrentFactor(), INITIAL_FACTOR * getCurrentFactor()
         );
     }
 
@@ -248,17 +255,11 @@ contract PCEToken is
         PCECommunityToken fromTarget = PCECommunityToken(fromToken);
         PCECommunityToken toTarget = PCECommunityToken(toToken);
 
-        uint256 exchangeRateRatio = Math.mulDiv(
-            localTokens[toToken].exchangeRate,
-            INITIAL_FACTOR,
-            localTokens[fromToken].exchangeRate
-        );
+        uint256 exchangeRateRatio =
+            Math.mulDiv(localTokens[toToken].exchangeRate, INITIAL_FACTOR, localTokens[fromToken].exchangeRate);
 
-        uint256 currentFactorRatio = Math.mulDiv(
-            toTarget.getCurrentFactor(),
-            INITIAL_FACTOR,
-            fromTarget.getCurrentFactor()
-        );
+        uint256 currentFactorRatio =
+            Math.mulDiv(toTarget.getCurrentFactor(), INITIAL_FACTOR, fromTarget.getCurrentFactor());
 
         uint256 result = Math.mulDiv(exchangeRateRatio, currentFactorRatio, INITIAL_FACTOR);
         return result;
@@ -304,13 +305,13 @@ contract PCEToken is
         require(pcetokenAmount > 0, "Target token deposit low");
 
         require(target.getRemainingSwapableToPCEBalance() >= amountToSwap, "Exceeds daily swap limit");
-        require(target.getRemainingSwapableToPCEBalanceForIndividual(_msgSender()) >= amountToSwap, "Exceeds daily individual swap limit");
+        require(
+            target.getRemainingSwapableToPCEBalanceForIndividual(_msgSender()) >= amountToSwap,
+            "Exceeds daily individual swap limit"
+        );
 
         // Explicit underflow guard with clear error message
-        require(
-            localTokens[fromToken].depositedPCEToken >= pcetokenAmount,
-            "Insufficient deposited PCE token reserve"
-        );
+        require(localTokens[fromToken].depositedPCEToken >= pcetokenAmount, "Insufficient deposited PCE token reserve");
 
         target.burnByPCEToken(_msgSender(), amountToSwap);
         target.recordSwapToPCE(_msgSender(), amountToSwap);
@@ -347,10 +348,7 @@ contract PCEToken is
             target.getCurrentFactor()
         );
         require(pcetokenAmount > 0, "Fee swap amount too small");
-        require(
-            localTokens[fromToken].depositedPCEToken >= pcetokenAmount,
-            "Insufficient deposited PCE token reserve"
-        );
+        require(localTokens[fromToken].depositedPCEToken >= pcetokenAmount, "Insufficient deposited PCE token reserve");
 
         _transfer(address(this), relayer, pcetokenAmount);
         localTokens[fromToken].depositedPCEToken -= pcetokenAmount;
@@ -382,12 +380,12 @@ contract PCEToken is
 
     function getMetaTransactionFee() public view returns (uint256) {
         uint256 nativeTokenFee = metaTransactionGas * (block.basefee + metaTransactionPriorityFee);
-        return Math.mulDiv(nativeTokenFee, getNativeTokenToPceTokenRate(), 2**96);
+        return Math.mulDiv(nativeTokenFee, getNativeTokenToPceTokenRate(), 2 ** 96);
     }
 
     function getMetaTransactionFeeWithBaseFee(uint256 _baseFee) public view returns (uint256) {
         uint256 nativeTokenFee = metaTransactionGas * (_baseFee + metaTransactionPriorityFee);
-        return Math.mulDiv(nativeTokenFee, getNativeTokenToPceTokenRate(), 2**96);
+        return Math.mulDiv(nativeTokenFee, getNativeTokenToPceTokenRate(), 2 ** 96);
     }
 
     function hasDecreaseTimeWithin(uint256 _start, uint256 _end) public pure returns (bool) {
@@ -451,9 +449,7 @@ contract PCEToken is
 
         // When reserves are fully drained the proportional formula collapses to zero, which would
         // brick all future swaps. Fall back to keeping the prior rate so the community can recover.
-        uint256 newRate = oldDeposited == 0
-            ? oldRate
-            : Math.mulDiv(oldRate, oldDeposited, oldDeposited + pceAmount);
+        uint256 newRate = oldDeposited == 0 ? oldRate : Math.mulDiv(oldRate, oldDeposited, oldDeposited + pceAmount);
         localTokens[communityToken].depositedPCEToken = oldDeposited + pceAmount;
         localTokens[communityToken].exchangeRate = newRate;
 
@@ -486,6 +482,6 @@ contract PCEToken is
     function _authorizeUpgrade(address newImplementation) internal virtual override onlyOwner { }
 
     function version() public pure returns (string memory) {
-        return "1.0.15";
+        return "1.0.16";
     }
 }
