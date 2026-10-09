@@ -520,7 +520,7 @@ contract PCETest is Test {
 
     function testVersion() public view {
         assertEq(pceToken.version(), "1.0.16");
-        assertEq(token.version(), "1.0.17");
+        assertEq(token.version(), "1.0.18");
     }
 
     // --- PIP-16: Owner-controlled token value operations tests ---
@@ -850,8 +850,9 @@ contract PCETest is Test {
         uint256 relayerCTBefore = token.balanceOf(relayer);
         uint256 user2CTBefore = token.balanceOf(user2);
 
+        token.updateFactorIfNeeded();
         uint256 displayFee = token.getMetaTransactionFee();
-        uint256 rawFee = token.displayBalanceToRawBalance(displayFee);
+        uint256 rawFee = token.displayFeeToRawBalance(displayFee);
 
         vm.expectEmit(true, true, false, true);
         emit PCECommunityToken.MetaTransactionFeeCollected(signer, relayer, displayFee, rawFee);

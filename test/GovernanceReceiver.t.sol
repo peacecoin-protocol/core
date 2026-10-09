@@ -1,9 +1,9 @@
 // SPDX-License-Identifier: MIT
 pragma solidity 0.8.30;
 
-import {Test} from "forge-std/Test.sol";
-import {GovernanceReceiver, IWormholeReceiver} from "../src/governance/GovernanceReceiver.sol";
-import {TimelockController} from "@openzeppelin/contracts/governance/TimelockController.sol";
+import { Test } from "forge-std/Test.sol";
+import { GovernanceReceiver, IWormholeReceiver } from "../src/governance/GovernanceReceiver.sol";
+import { TimelockController } from "@openzeppelin/contracts/governance/TimelockController.sol";
 
 /// @dev Mock Wormhole Core Bridge that returns configurable VM results
 contract MockWormholeBridge {
@@ -21,7 +21,9 @@ contract MockWormholeBridge {
     }
 
     function parseAndVerifyVM(bytes calldata)
-        external view returns (IWormholeReceiver.VM memory, bool, string memory)
+        external
+        view
+        returns (IWormholeReceiver.VM memory, bool, string memory)
     {
         return (lastVM, valid, reason);
     }
@@ -63,8 +65,15 @@ contract GovernanceReceiverTest is Test {
     }
 
     function _encodePayload(
-        address[] memory targets, uint256[] memory values, bytes[] memory calldatas, bytes32 salt
-    ) internal view returns (bytes memory) {
+        address[] memory targets,
+        uint256[] memory values,
+        bytes[] memory calldatas,
+        bytes32 salt
+    )
+        internal
+        view
+        returns (bytes memory)
+    {
         return abi.encode(targets, values, calldatas, salt, address(receiver), uint16(5));
     }
 
@@ -140,7 +149,9 @@ contract GovernanceReceiverTest is Test {
 
         // Replay with sequence 0 again
         wormhole.setVM(_makeVM(_encodePayload(targets, values, calldatas, salt2), 0));
-        vm.expectRevert(abi.encodeWithSelector(GovernanceReceiver.InvalidSequence.selector, uint64(0), uint64(1)));
+        vm.expectRevert(
+            abi.encodeWithSelector(GovernanceReceiver.MessageAlreadyProcessed.selector, senderAddr, uint64(0))
+        );
         receiver.receiveMessage(hex"00");
     }
 
@@ -248,5 +259,60 @@ contract GovernanceReceiverTest is Test {
         vm.deal(address(receiver), 1 ether);
         vm.expectRevert(GovernanceReceiver.WithdrawFailed.selector);
         receiver.withdrawETH(payable(address(0)), 0.5 ether);
+    }
+
+    function _deliver(uint64 sequence, bytes32 salt) internal {
+        address[] memory targets = new address[](1);
+        targets[0] = address(0x1234);
+        wormhole.setVM(_makeVM(_encodePayload(targets, new uint256[](1), new bytes[](1), salt), sequence));
+        receiver.receiveMessage(hex"00");
+    }
+
+    function testOutOfOrderDeliverySchedulesEveryUniqueMessage() public {
+        _deliver(10, keccak256("ten"));
+        _deliver(3, keccak256("three"));
+        _deliver(7, keccak256("seven"));
+        assertTrue(receiver.processedMessages(senderAddr, 10));
+        assertTrue(receiver.processedMessages(senderAddr, 3));
+        assertTrue(receiver.processedMessages(senderAddr, 7));
+        assertEq(receiver.nextMinimumSequence(), 11);
+    }
+
+    function testReplayProtectionIsScopedToEmitter() public {
+        _deliver(0, keccak256("old"));
+        bytes32 oldSender = senderAddr;
+        senderAddr = bytes32(uint256(123));
+        receiver.setGovernanceSender(senderAddr);
+        _deliver(0, keccak256("new"));
+        assertTrue(receiver.processedMessages(oldSender, 0));
+        assertTrue(receiver.processedMessages(senderAddr, 0));
+        receiver.setGovernanceSender(oldSender);
+        senderAddr = oldSender;
+        wormhole.setVM(_makeVM(hex"", 0));
+        vm.expectRevert(
+            abi.encodeWithSelector(GovernanceReceiver.MessageAlreadyProcessed.selector, oldSender, uint64(0))
+        );
+        receiver.receiveMessage(hex"00");
+    }
+
+    function testMaximumSequenceDoesNotOverflowOrBlockEarlierMessages() public {
+        _deliver(type(uint64).max, keccak256("max"));
+        _deliver(1, keccak256("one"));
+        assertEq(receiver.nextMinimumSequence(), type(uint64).max);
+        assertTrue(receiver.processedMessages(senderAddr, 1));
+    }
+
+    function testSchedulingFailureDoesNotConsumeMessage() public {
+        _deliver(0, keccak256("duplicate-operation"));
+        address[] memory targets = new address[](1);
+        targets[0] = address(0x1234);
+        bytes memory payload =
+            _encodePayload(targets, new uint256[](1), new bytes[](1), keccak256("duplicate-operation"));
+        wormhole.setVM(_makeVM(payload, 1));
+        vm.expectRevert();
+        receiver.receiveMessage(hex"00");
+        assertFalse(receiver.processedMessages(senderAddr, 1));
+        _deliver(1, keccak256("retry"));
+        assertTrue(receiver.processedMessages(senderAddr, 1));
     }
 }
