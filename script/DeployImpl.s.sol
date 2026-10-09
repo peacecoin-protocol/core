@@ -49,7 +49,11 @@ contract DeployImpl is Script {
         console.log("2. Create Tally proposal with two actions:");
         console.log("   a) Target: PCEToken proxy (0xA4807a8C34353A5EA51aF073175950Cb6248dA7E)");
         console.log("      Method: upgradeToAndCall(address,bytes)");
-        console.log("      Args: (pceTokenImpl, 0x)");
+        console.log("      Read the proxy's getDomainSeperator() before preparing the proposal.");
+        console.log("      If nonzero, args: (pceTokenImpl, 0x)");
+        console.log("      If zero, args: (pceTokenImpl, migrationData), where migrationData is:");
+        console.logBytes(abi.encodeCall(PCEToken.initializeNativeMetaTransaction, ()));
+        console.log("      Include migrationData in upgradeToAndCall; do not submit it as a later action.");
         console.log("   b) Target: PCECommunityToken beacon (0x6A73A610707C113F34D8B82498b6868e5f7FAA74)");
         console.log("      Method: upgradeTo(address)");
         console.log("      Args: (pceCommunityTokenImpl)");

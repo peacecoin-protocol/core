@@ -519,7 +519,7 @@ contract PCETest is Test {
     }
 
     function testVersion() public view {
-        assertEq(pceToken.version(), "1.0.15");
+        assertEq(pceToken.version(), "1.0.16");
         assertEq(token.version(), "1.0.17");
     }
 

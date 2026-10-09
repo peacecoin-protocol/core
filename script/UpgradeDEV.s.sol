@@ -25,7 +25,10 @@ contract UpgradeDEV is Script {
         address pceTokenImpl = address(new PCEToken());
         address pceCommunityTokenImpl = address(new PCECommunityToken());
 
-        UnsafeUpgrades.upgradeProxy(pceTokenAddress, pceTokenImpl, new bytes(0));
+        bytes memory migrationData = PCEToken(pceTokenAddress).getDomainSeperator() == bytes32(0)
+            ? abi.encodeCall(PCEToken.initializeNativeMetaTransaction, ())
+            : new bytes(0);
+        UnsafeUpgrades.upgradeProxy(pceTokenAddress, pceTokenImpl, migrationData);
         UnsafeUpgrades.upgradeBeacon(pceCommunityTokenAddress, pceCommunityTokenImpl);
 
         vm.stopBroadcast();
