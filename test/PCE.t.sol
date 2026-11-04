@@ -519,8 +519,8 @@ contract PCETest is Test {
     }
 
     function testVersion() public view {
-        assertEq(pceToken.version(), "1.0.16");
-        assertEq(token.version(), "1.0.18");
+        assertEq(pceToken.version(), "1.0.17");
+        assertEq(token.version(), "1.0.19");
     }
 
     // --- PIP-16: Owner-controlled token value operations tests ---

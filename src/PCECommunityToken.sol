@@ -417,22 +417,31 @@ contract PCECommunityToken is
         );
     }
 
+    /// @notice Swap this community token for another registered community token.
+    /// @dev Routed through PCEToken so the PCE reserve moves from this token to the target
+    /// and the target `mint` is called by PCEToken. The source token's daily swap-to-PCE
+    /// limits apply because this token's reserve leaves the community.
     function swapTokens(address toTokenAddress, uint256 amountToSwap) public {
-        address sender = _msgSender();
+        _swapTokens(_msgSender(), toTokenAddress, amountToSwap);
+    }
+
+    function _swapTokens(address sender, address toTokenAddress, uint256 amountToSwap) internal {
+        require(toTokenAddress != address(this), "Cannot swap to same token");
         updateFactorIfNeeded();
-        PCEToken(pceAddress).updateFactorIfNeeded();
         PCECommunityToken to = PCECommunityToken(toTokenAddress);
         to.updateFactorIfNeeded();
 
         require(balanceOf(sender) >= amountToSwap, "Insufficient balance");
         require(isAllowOutgoExchange(toTokenAddress), "Outgo exchange not allowed");
         require(to.isAllowIncomeExchange(address(this)), "Income exchange not allowed");
-
-        uint256 targetTokenAmount = TokenValueOps.computeSwapAmount(
-            pceAddress, address(this), toTokenAddress, amountToSwap, getCurrentFactor(), to.getCurrentFactor()
+        require(getRemainingSwapableToPCEBalance() >= amountToSwap, "Exceeds daily swap limit");
+        require(
+            getRemainingSwapableToPCEBalanceForIndividual(sender) >= amountToSwap, "Exceeds daily individual swap limit"
         );
-        super._burn(sender, displayBalanceToRawBalance(amountToSwap));
-        to.mint(sender, targetTokenAmount);
+
+        _burn(sender, displayBalanceToRawBalance(amountToSwap));
+        _recordSwapToPCE(sender, amountToSwap);
+        PCEToken(pceAddress).swapBetweenLocalTokens(toTokenAddress, sender, amountToSwap);
     }
 
     function getMetaTransactionFee() public view returns (uint256) {
@@ -605,6 +614,10 @@ contract PCECommunityToken is
     // --- V11: Record daily swap-to-PCE usage ---
     function recordSwapToPCE(address account, uint256 displayAmount) external {
         require(_msgSender() == pceAddress, "Only PCE token");
+        _recordSwapToPCE(account, displayAmount);
+    }
+
+    function _recordSwapToPCE(address account, uint256 displayAmount) internal {
         // Global daily reset
         if (intervalDaysOf(swappedToPCETodayModifiedTime, block.timestamp, 1)) {
             swappedToPCEToday = 0;
@@ -887,6 +900,6 @@ contract PCECommunityToken is
     }
 
     function version() public pure returns (string memory) {
-        return "1.0.18";
+        return "1.0.19";
     }
 }
