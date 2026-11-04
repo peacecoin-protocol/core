@@ -718,9 +718,11 @@ contract BytesSignatureAuthorizationTest is Test {
     function testSwapToLocalTokenRejectsNativeMetaDomain() public {
         bytes32 nonce = keccak256("swap-to-local-domain");
         uint256 fee = pce.getMetaTransactionFee();
-        bytes memory sig = _sign(
-            WALLET_PK, _domain("PeaceBaseCoin", address(pce)), _swapToLocalHash(address(wallet), 1 ether, 0, fee, nonce)
-        );
+        // The native meta-transaction domain (salt-based, see EIP712Base) must not be accepted.
+        bytes32 nativeDomain = pce.getDomainSeperator();
+        assertTrue(nativeDomain != bytes32(0));
+        assertTrue(nativeDomain != _domain("PCE Token", address(pce)));
+        bytes memory sig = _sign(WALLET_PK, nativeDomain, _swapToLocalHash(address(wallet), 1 ether, 0, fee, nonce));
         vm.prank(RELAYER);
         vm.expectRevert("Invalid signature");
         pce.swapToLocalTokenWithAuthorization(
