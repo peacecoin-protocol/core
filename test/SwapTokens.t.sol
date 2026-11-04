@@ -34,6 +34,11 @@ contract SwapTokensTest is Test {
         vm.prank(USER);
         tokenA.transfer(address(0xBEEF), 1 ether);
         vm.warp(block.timestamp + 1 days);
+        // Refresh today's supply and balance snapshots so the limits read by the tests do not
+        // change on the first swap of the day.
+        tokenA.transfer(address(this), 0);
+        vm.prank(USER);
+        tokenA.transfer(USER, 0);
     }
 
     function _createToken(
@@ -140,9 +145,27 @@ contract SwapTokensTest is Test {
     }
 
     function testSwapTokensRejectsUnregisteredTarget() public {
+        // A community token wired to the real PCEToken that accepts incoming exchanges, but was
+        // never registered by `createToken`.
         PCECommunityToken stray = PCECommunityToken(deployCode("PCECommunityToken.sol:PCECommunityToken"));
+        vm.startPrank(address(pce));
+        stray.initialize("Stray", "STR", 1 ether);
+        stray.setTokenSettings(
+            1,
+            10_000,
+            1000,
+            500,
+            1000,
+            100,
+            ExchangeAllowMethod.All,
+            ExchangeAllowMethod.All,
+            new address[](0),
+            new address[](0)
+        );
+        vm.stopPrank();
+
         vm.prank(USER);
-        vm.expectRevert();
+        vm.expectRevert("Target token not found");
         tokenA.swapTokens(address(stray), 1 ether);
     }
 
