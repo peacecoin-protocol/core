@@ -9,6 +9,8 @@ import { ERC20PermitUpgradeable } from
 import { PCEToken } from "./PCEToken.sol";
 import { EIP3009 } from "./lib/EIP3009.sol";
 import { ECRecover } from "./lib/ECRecover.sol";
+import { EIP712 } from "./lib/EIP712.sol";
+import { AuthorizationSignature } from "./lib/AuthorizationSignature.sol";
 import { TokenSetting } from "./lib/TokenSetting.sol";
 import { ExchangeAllowMethod } from "./lib/Enum.sol";
 import { Math } from "@openzeppelin/contracts/utils/math/Math.sol";
@@ -54,6 +56,21 @@ contract PCECommunityToken is
     */
     bytes32 public constant CLAIM_WITH_AUTHORIZATION_TYPEHASH =
         0x0b6aae1d90e3a85a25061f4c51e754a9cce2a86cf2f51fb09be1001de8fb7c0a;
+
+    // Type hashes of the `bytes` signature functions. They are signed under the
+    // "PeaceBaseCoin" domain used by `transferWithAuthorization`.
+    bytes32 public constant TRANSFER_WITH_FEE_AUTHORIZATION_TYPEHASH = keccak256(
+        "TransferWithFeeAuthorization(address from,address to,uint256 value,uint256 maxFee,uint256 validAfter,uint256 validBefore,bytes32 nonce)"
+    );
+    bytes32 public constant SET_INFINITY_APPROVE_FLAG_WITH_FEE_AUTHORIZATION_TYPEHASH = keccak256(
+        "SetInfinityApproveFlagWithFeeAuthorization(address owner,address spender,bool flag,uint256 maxFee,uint256 validAfter,uint256 validBefore,bytes32 nonce)"
+    );
+    bytes32 public constant SWAP_TOKENS_WITH_AUTHORIZATION_TYPEHASH = keccak256(
+        "SwapTokensWithAuthorization(address from,address toToken,uint256 value,uint256 minAmountOut,uint256 maxFee,uint256 validAfter,uint256 validBefore,bytes32 nonce)"
+    );
+    bytes32 public constant SWAP_TO_PCE_WITH_AUTHORIZATION_TYPEHASH = keccak256(
+        "SwapToPCEWithAuthorization(address from,uint256 value,uint256 minAmountOut,uint256 maxFee,uint256 validAfter,uint256 validBefore,bytes32 nonce)"
+    );
 
     address public pceAddress;
     uint256 public initialFactor;
@@ -455,8 +472,21 @@ contract PCECommunityToken is
         );
     }
 
-    function _digest(bytes memory data) internal view returns (bytes32) {
-        return keccak256(abi.encodePacked("\x19\x01", this.DOMAIN_SEPARATOR(), keccak256(data)));
+    function _consumeAuthorization(
+        address authorizer,
+        uint256 validAfter,
+        uint256 validBefore,
+        bytes32 nonce,
+        bytes32 structHash
+    )
+        internal
+    {
+        require(block.timestamp > validAfter, "Not yet valid");
+        require(block.timestamp < validBefore, "Authorization expired");
+        require(!_authorizationStates[authorizer][nonce], "Authorization used");
+        _authorizationStates[authorizer][nonce] = true;
+        emit AuthorizationUsed(authorizer, nonce);
+        emit AuthorizationExecuted(authorizer, nonce, structHash);
     }
 
     function _useAuthorization(
@@ -464,19 +494,40 @@ contract PCECommunityToken is
         uint256 validAfter,
         uint256 validBefore,
         bytes32 nonce,
-        bytes32 digest,
+        bytes32 structHash,
         uint8 v,
         bytes32 r,
         bytes32 s
     )
         internal
     {
-        require(block.timestamp > validAfter, "Not yet valid");
-        require(block.timestamp < validBefore, "Authorization expired");
-        require(!_authorizationStates[authorizer][nonce], "Authorization used");
+        _consumeAuthorization(authorizer, validAfter, validBefore, nonce, structHash);
+        bytes32 digest = keccak256(abi.encodePacked("\x19\x01", this.DOMAIN_SEPARATOR(), structHash));
         require(ECRecover.recover(digest, v, r, s) == authorizer, "Invalid signature");
-        _authorizationStates[authorizer][nonce] = true;
-        emit AuthorizationUsed(authorizer, nonce);
+    }
+
+    /// @dev For the `bytes` signature functions. The nonce is marked used before the signature
+    /// check; a failed check reverts the whole call.
+    function _useAuthorization(
+        address authorizer,
+        uint256 validAfter,
+        uint256 validBefore,
+        bytes32 nonce,
+        bytes32 structHash,
+        bytes memory signature
+    )
+        internal
+    {
+        require(authorizer != address(0), "Invalid authorizer address");
+        _consumeAuthorization(authorizer, validAfter, validBefore, nonce, structHash);
+        bytes32 digest =
+            keccak256(abi.encodePacked("\x19\x01", EIP712.makeDomainSeparator("PeaceBaseCoin", "1"), structHash));
+        require(AuthorizationSignature.isValid(authorizer, digest, signature), "Invalid signature");
+    }
+
+    function _checkedMetaTransactionFee(uint256 maxFee) internal view returns (uint256 displayFee) {
+        displayFee = getMetaTransactionFee();
+        require(displayFee <= maxFee, "Fee exceeds maxFee");
     }
 
     function _collectFeeAsPCE(address from, address relayer, uint256 displayFee) internal returns (uint256) {
@@ -561,7 +612,7 @@ contract PCECommunityToken is
             validAfter,
             validBefore,
             nonce,
-            _digest(
+            keccak256(
                 abi.encode(
                     TRANSFER_FROM_WITH_AUTHORIZATION_TYPEHASH,
                     spender,
@@ -697,7 +748,7 @@ contract PCECommunityToken is
             validAfter,
             validBefore,
             nonce,
-            _digest(
+            keccak256(
                 abi.encode(
                     SET_INFINITY_APPROVE_FLAG_WITH_AUTHORIZATION_TYPEHASH,
                     owner,
@@ -717,6 +768,189 @@ contract PCECommunityToken is
         emit InfinityApproveFlagSet(owner, spender, flag);
 
         _collectFeeAsPCE(owner, _msgSender(), displayFee);
+    }
+
+    // ====================================================================
+    // `bytes` signature authorization functions
+    //
+    // The signature is 65-byte ECDSA (r || s || v) for EOAs or ERC-1271 for
+    // smart accounts, over the "PeaceBaseCoin" domain. The nonce space is the
+    // one shared with the `v, r, s` functions. Fees are paid to the caller
+    // (the relayer) and are capped by the signed `maxFee`.
+    // ====================================================================
+
+    function transferWithAuthorization(
+        address from,
+        address to,
+        uint256 displayAmount,
+        uint256 maxFee,
+        uint256 validAfter,
+        uint256 validBefore,
+        bytes32 nonce,
+        bytes memory signature
+    )
+        external
+    {
+        _useAuthorization(
+            from,
+            validAfter,
+            validBefore,
+            nonce,
+            keccak256(
+                abi.encode(
+                    TRANSFER_WITH_FEE_AUTHORIZATION_TYPEHASH,
+                    from,
+                    to,
+                    displayAmount,
+                    maxFee,
+                    validAfter,
+                    validBefore,
+                    nonce
+                )
+            ),
+            signature
+        );
+
+        updateFactorIfNeeded();
+        uint256 rawBalance = super.balanceOf(from);
+        uint256 rawAmount = displayBalanceToRawBalance(displayAmount);
+        require(rawAmount > 0, "Amount must be greater than zero");
+        uint256 displayFee = _checkedMetaTransactionFee(maxFee);
+
+        super._transfer(from, to, rawAmount);
+        _collectFeeAsPCE(from, _msgSender(), displayFee);
+
+        _mintArigatoCreation(from, rawAmount, rawBalance, 1);
+    }
+
+    function setInfinityApproveFlagWithAuthorization(
+        address owner,
+        address spender,
+        bool flag,
+        uint256 maxFee,
+        uint256 validAfter,
+        uint256 validBefore,
+        bytes32 nonce,
+        bytes memory signature
+    )
+        external
+    {
+        require(spender != address(0), "Invalid spender address");
+        _useAuthorization(
+            owner,
+            validAfter,
+            validBefore,
+            nonce,
+            keccak256(
+                abi.encode(
+                    SET_INFINITY_APPROVE_FLAG_WITH_FEE_AUTHORIZATION_TYPEHASH,
+                    owner,
+                    spender,
+                    flag,
+                    maxFee,
+                    validAfter,
+                    validBefore,
+                    nonce
+                )
+            ),
+            signature
+        );
+
+        updateFactorIfNeeded();
+        uint256 displayFee = _checkedMetaTransactionFee(maxFee);
+
+        _infinityApproveFlags[owner][spender] = flag;
+        emit InfinityApproveFlagSet(owner, spender, flag);
+
+        _collectFeeAsPCE(owner, _msgSender(), displayFee);
+    }
+
+    /// @notice Swap to another community token on behalf of `from`.
+    /// @dev `minAmountOut` is compared with the increase of `from`'s display balance of `toToken`.
+    /// The fee is paid in this token.
+    function swapTokensWithAuthorization(
+        address from,
+        address toToken,
+        uint256 value,
+        uint256 minAmountOut,
+        uint256 maxFee,
+        uint256 validAfter,
+        uint256 validBefore,
+        bytes32 nonce,
+        bytes memory signature
+    )
+        external
+    {
+        _useAuthorization(
+            from,
+            validAfter,
+            validBefore,
+            nonce,
+            keccak256(
+                abi.encode(
+                    SWAP_TOKENS_WITH_AUTHORIZATION_TYPEHASH,
+                    from,
+                    toToken,
+                    value,
+                    minAmountOut,
+                    maxFee,
+                    validAfter,
+                    validBefore,
+                    nonce
+                )
+            ),
+            signature
+        );
+
+        PCECommunityToken target = PCECommunityToken(toToken);
+        uint256 balanceBefore = target.balanceOf(from);
+        _swapTokens(from, toToken, value);
+        require(target.balanceOf(from) - balanceBefore >= minAmountOut, "Insufficient output amount");
+
+        _collectFeeAsPCE(from, _msgSender(), _checkedMetaTransactionFee(maxFee));
+    }
+
+    /// @notice Swap to PCE on behalf of `from`.
+    /// @dev `minAmountOut` is compared with the increase of `from`'s PCE balance. The fee is paid
+    /// in this token.
+    function swapToPCEWithAuthorization(
+        address from,
+        uint256 value,
+        uint256 minAmountOut,
+        uint256 maxFee,
+        uint256 validAfter,
+        uint256 validBefore,
+        bytes32 nonce,
+        bytes memory signature
+    )
+        external
+    {
+        _useAuthorization(
+            from,
+            validAfter,
+            validBefore,
+            nonce,
+            keccak256(
+                abi.encode(
+                    SWAP_TO_PCE_WITH_AUTHORIZATION_TYPEHASH,
+                    from,
+                    value,
+                    minAmountOut,
+                    maxFee,
+                    validAfter,
+                    validBefore,
+                    nonce
+                )
+            ),
+            signature
+        );
+
+        PCEToken pceToken = PCEToken(pceAddress);
+        uint256 balanceBefore = pceToken.balanceOf(from);
+        pceToken.swapFromLocalTokenFor(from, value);
+        require(pceToken.balanceOf(from) - balanceBefore >= minAmountOut, "Insufficient output amount");
+
+        _collectFeeAsPCE(from, _msgSender(), _checkedMetaTransactionFee(maxFee));
     }
 
     // ====================================================================
@@ -804,6 +1038,40 @@ contract PCECommunityToken is
             s,
             _msgSender()
         );
+    }
+
+    function claimVoucherWithAuthorization(
+        address claimer,
+        string memory issuanceId,
+        string memory code,
+        bytes32[] calldata proof,
+        uint256 validAfter,
+        uint256 validBefore,
+        bytes32 nonce,
+        bytes memory signature
+    )
+        external
+    {
+        _useAuthorization(
+            claimer,
+            validAfter,
+            validBefore,
+            nonce,
+            keccak256(
+                abi.encode(
+                    CLAIM_WITH_AUTHORIZATION_TYPEHASH,
+                    claimer,
+                    keccak256(bytes(issuanceId)),
+                    keccak256(bytes(code)),
+                    validAfter,
+                    validBefore,
+                    nonce
+                )
+            ),
+            signature
+        );
+        updateFactorIfNeeded();
+        VoucherSystem.claimAuthorizedAndTransfer(_voucherStorage, claimer, issuanceId, code, proof, _msgSender());
     }
 
     function getVoucherIssuanceInfo(string memory issuanceId) external view returns (VoucherIssuanceInfo memory) {

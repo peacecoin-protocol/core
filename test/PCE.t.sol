@@ -39,11 +39,11 @@ contract PCETest is Test {
 
         vm.startPrank(owner);
 
-        PCECommunityToken communityImpl = new PCECommunityToken();
+        PCECommunityToken communityImpl = PCECommunityToken(deployCode("PCECommunityToken.sol:PCECommunityToken"));
 
         pceCommunityTokenBeacon = new MinimalBeacon(address(communityImpl));
 
-        pceToken = new PCEToken();
+        pceToken = PCEToken(deployCode("PCEToken.sol:PCEToken"));
         pceToken.initialize();
         // Simulate V1 initialize values that were set before upgrade to V11
         // These values would exist in storage on a real deployment (set by V1's initialize)
