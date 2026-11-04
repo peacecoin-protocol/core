@@ -14,6 +14,7 @@ import { AuthorizationSignature } from "./lib/AuthorizationSignature.sol";
 import { TokenSetting } from "./lib/TokenSetting.sol";
 import { ExchangeAllowMethod } from "./lib/Enum.sol";
 import { Math } from "@openzeppelin/contracts/utils/math/Math.sol";
+import { ReentrancyGuardTransient } from "@openzeppelin/contracts/utils/ReentrancyGuardTransient.sol";
 import { VoucherSystem } from "./lib/VoucherSystem.sol";
 import { TokenValueOps } from "./lib/TokenValueOps.sol";
 import { ArigatoCreation } from "./lib/ArigatoCreation.sol";
@@ -24,7 +25,8 @@ contract PCECommunityToken is
     OwnableUpgradeable,
     EIP3009,
     ERC20PermitUpgradeable,
-    TokenSetting
+    TokenSetting,
+    ReentrancyGuardTransient
 {
     uint256 public constant INITIAL_FACTOR = 10 ** 18;
     uint16 public constant BP_BASE = 10_000;
@@ -560,6 +562,7 @@ contract PCECommunityToken is
     )
         public
         override
+        nonReentrant
     {
         updateFactorIfNeeded();
         uint256 rawBalance = super.balanceOf(from);
@@ -588,6 +591,7 @@ contract PCECommunityToken is
         bytes32 s
     )
         public
+        nonReentrant
     {
         updateFactorIfNeeded();
 
@@ -733,6 +737,7 @@ contract PCECommunityToken is
         bytes32 s
     )
         public
+        nonReentrant
     {
         updateFactorIfNeeded();
 
@@ -790,6 +795,7 @@ contract PCECommunityToken is
         bytes memory signature
     )
         external
+        nonReentrant
     {
         _useAuthorization(
             from,
@@ -834,6 +840,7 @@ contract PCECommunityToken is
         bytes memory signature
     )
         external
+        nonReentrant
     {
         require(spender != address(0), "Invalid spender address");
         _useAuthorization(
@@ -880,6 +887,7 @@ contract PCECommunityToken is
         bytes memory signature
     )
         external
+        nonReentrant
     {
         _useAuthorization(
             from,
@@ -924,6 +932,7 @@ contract PCECommunityToken is
         bytes memory signature
     )
         external
+        nonReentrant
     {
         _useAuthorization(
             from,
@@ -1020,6 +1029,7 @@ contract PCECommunityToken is
         bytes32 s
     )
         external
+        nonReentrant
     {
         updateFactorIfNeeded();
         require(claimer != address(0), "Invalid claimer address");
@@ -1051,6 +1061,7 @@ contract PCECommunityToken is
         bytes memory signature
     )
         external
+        nonReentrant
     {
         _useAuthorization(
             claimer,
