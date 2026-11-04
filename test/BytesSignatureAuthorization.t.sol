@@ -420,10 +420,36 @@ contract BytesSignatureAuthorizationTest is Test {
         );
     }
 
+    function _claimWithFeeHash(
+        address claimer,
+        string memory id,
+        string memory code,
+        uint256 maxFee,
+        bytes32 nonce
+    )
+        internal
+        view
+        returns (bytes32)
+    {
+        return keccak256(
+            abi.encode(
+                tokenA.CLAIM_WITH_FEE_AUTHORIZATION_TYPEHASH(),
+                claimer,
+                keccak256(bytes(id)),
+                keccak256(bytes(code)),
+                maxFee,
+                uint256(0),
+                NO_EXPIRY,
+                nonce
+            )
+        );
+    }
+
     function testClaimVoucherWithERC1271Signature() public {
         _registerVoucher("V1", "CODE-1");
         bytes32 nonce = keccak256("claim");
-        bytes32 structHash = _claimHash(address(wallet), "V1", "CODE-1", nonce);
+        uint256 fee = tokenA.getMetaTransactionFee();
+        bytes32 structHash = _claimWithFeeHash(address(wallet), "V1", "CODE-1", fee, nonce);
         bytes memory sig = _sign(WALLET_PK, _domain("PeaceBaseCoin", address(tokenA)), structHash);
         uint256 before = tokenA.balanceOf(address(wallet));
 
@@ -431,21 +457,38 @@ contract BytesSignatureAuthorizationTest is Test {
         emit EIP3009.AuthorizationExecuted(address(wallet), nonce, structHash);
         vm.prank(RELAYER);
         tokenA.claimVoucherWithAuthorization(
-            address(wallet), "V1", "CODE-1", new bytes32[](0), 0, NO_EXPIRY, nonce, sig
+            address(wallet), "V1", "CODE-1", new bytes32[](0), fee, 0, NO_EXPIRY, nonce, sig
         );
 
         assertGt(tokenA.balanceOf(address(wallet)), before);
-        assertGt(pce.balanceOf(RELAYER), 0);
+        assertEq(pce.balanceOf(RELAYER), fee);
+    }
+
+    function testClaimVoucherRevertsWhenFeeExceedsMaxFee() public {
+        _registerVoucher("V4", "CODE-4");
+        bytes32 nonce = keccak256("claim-max-fee");
+        uint256 fee = tokenA.getMetaTransactionFee();
+        bytes memory sig = _sign(
+            WALLET_PK,
+            _domain("PeaceBaseCoin", address(tokenA)),
+            _claimWithFeeHash(address(wallet), "V4", "CODE-4", fee - 1, nonce)
+        );
+        vm.prank(RELAYER);
+        vm.expectRevert("Fee exceeds maxFee");
+        tokenA.claimVoucherWithAuthorization(
+            address(wallet), "V4", "CODE-4", new bytes32[](0), fee - 1, 0, NO_EXPIRY, nonce, sig
+        );
     }
 
     function testClaimVoucherRejectsPermitDomainSignature() public {
         // The bytes version is signed under the "PeaceBaseCoin" domain, not DOMAIN_SEPARATOR().
         _registerVoucher("V2", "CODE-2");
         bytes32 nonce = keccak256("claim-permit-domain");
-        bytes memory sig = _sign(EOA_PK, tokenA.DOMAIN_SEPARATOR(), _claimHash(eoa, "V2", "CODE-2", nonce));
+        uint256 fee = tokenA.getMetaTransactionFee();
+        bytes memory sig = _sign(EOA_PK, tokenA.DOMAIN_SEPARATOR(), _claimWithFeeHash(eoa, "V2", "CODE-2", fee, nonce));
         vm.prank(RELAYER);
         vm.expectRevert("Invalid signature");
-        tokenA.claimVoucherWithAuthorization(eoa, "V2", "CODE-2", new bytes32[](0), 0, NO_EXPIRY, nonce, sig);
+        tokenA.claimVoucherWithAuthorization(eoa, "V2", "CODE-2", new bytes32[](0), fee, 0, NO_EXPIRY, nonce, sig);
     }
 
     // ------------------------------------------------- swapTokensWithAuthorization

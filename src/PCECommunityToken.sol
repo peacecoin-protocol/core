@@ -65,6 +65,9 @@ contract PCECommunityToken is
     bytes32 public constant SET_INFINITY_APPROVE_FLAG_WITH_FEE_AUTHORIZATION_TYPEHASH = keccak256(
         "SetInfinityApproveFlagWithFeeAuthorization(address owner,address spender,bool flag,uint256 maxFee,uint256 validAfter,uint256 validBefore,bytes32 nonce)"
     );
+    bytes32 public constant CLAIM_WITH_FEE_AUTHORIZATION_TYPEHASH = keccak256(
+        "ClaimWithFeeAuthorization(address claimer,string issuanceId,string code,uint256 maxFee,uint256 validAfter,uint256 validBefore,bytes32 nonce)"
+    );
     bytes32 public constant SWAP_TOKENS_WITH_AUTHORIZATION_TYPEHASH = keccak256(
         "SwapTokensWithAuthorization(address from,address toToken,uint256 value,uint256 minAmountOut,uint256 maxFee,uint256 validAfter,uint256 validBefore,bytes32 nonce)"
     );
@@ -1040,11 +1043,13 @@ contract PCECommunityToken is
         );
     }
 
+    /// @dev The fee is withheld from the claimed amount and capped by the signed `maxFee`.
     function claimVoucherWithAuthorization(
         address claimer,
         string memory issuanceId,
         string memory code,
         bytes32[] calldata proof,
+        uint256 maxFee,
         uint256 validAfter,
         uint256 validBefore,
         bytes32 nonce,
@@ -1059,10 +1064,11 @@ contract PCECommunityToken is
             nonce,
             keccak256(
                 abi.encode(
-                    CLAIM_WITH_AUTHORIZATION_TYPEHASH,
+                    CLAIM_WITH_FEE_AUTHORIZATION_TYPEHASH,
                     claimer,
                     keccak256(bytes(issuanceId)),
                     keccak256(bytes(code)),
+                    maxFee,
                     validAfter,
                     validBefore,
                     nonce
@@ -1071,7 +1077,9 @@ contract PCECommunityToken is
             signature
         );
         updateFactorIfNeeded();
-        VoucherSystem.claimAuthorizedAndTransfer(_voucherStorage, claimer, issuanceId, code, proof, _msgSender());
+        VoucherSystem.claimAuthorizedAndTransfer(
+            _voucherStorage, claimer, issuanceId, code, proof, maxFee, _msgSender()
+        );
     }
 
     function getVoucherIssuanceInfo(string memory issuanceId) external view returns (VoucherIssuanceInfo memory) {
