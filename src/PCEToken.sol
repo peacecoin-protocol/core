@@ -48,6 +48,14 @@ contract PCEToken is
     event TokensSwappedFromLocalToken(
         address indexed to, address indexed fromToken, uint256 targetTokenAmount, uint256 pceTokenAmount
     );
+    event TokensSwappedBetweenLocalTokens(
+        address indexed account,
+        address indexed fromToken,
+        address indexed toToken,
+        uint256 fromTokenAmount,
+        uint256 pceTokenAmount,
+        uint256 targetTokenAmount
+    );
     event FeeSwappedFromLocalToken(
         address indexed fromToken, address indexed relayer, uint256 communityTokenAmount, uint256 pceAmount
     );
@@ -322,6 +330,54 @@ contract PCEToken is
         emit TokensSwappedFromLocalToken(_msgSender(), fromToken, amountToSwap, pcetokenAmount);
     }
 
+    /// @notice Move value between two registered community tokens on behalf of `account`.
+    /// @dev Only callable by the source community token after it has burned `amountToSwap`
+    /// from `account` and applied its exchange and daily-limit checks. The accounting equals
+    /// `swapFromLocalToken` followed by `swapToLocalToken`: the PCE reserve moves from the
+    /// source token to the target token, and the target token is minted by this contract.
+    function swapBetweenLocalTokens(
+        address toToken,
+        address account,
+        uint256 amountToSwap
+    )
+        external
+        returns (uint256 targetTokenAmount)
+    {
+        address fromToken = msg.sender;
+        require(localTokens[fromToken].isExists, "Caller must be a community token");
+        require(localTokens[toToken].isExists, "Target token not found");
+
+        updateFactorIfNeeded();
+
+        PCECommunityToken source = PCECommunityToken(fromToken);
+        PCECommunityToken target = PCECommunityToken(toToken);
+        target.updateFactorIfNeeded();
+
+        uint256 pcetokenAmount = Math.mulDiv(
+            Math.mulDiv(amountToSwap, INITIAL_FACTOR, localTokens[fromToken].exchangeRate),
+            lastModifiedFactor,
+            source.getCurrentFactor()
+        );
+        require(pcetokenAmount > 0, "Target token deposit low");
+        require(localTokens[fromToken].depositedPCEToken >= pcetokenAmount, "Insufficient deposited PCE token reserve");
+
+        targetTokenAmount = Math.mulDiv(
+            Math.mulDiv(pcetokenAmount, localTokens[toToken].exchangeRate, INITIAL_FACTOR),
+            target.getCurrentFactor(),
+            lastModifiedFactor
+        );
+        require(targetTokenAmount > 0, "Invalid amount to swap");
+
+        localTokens[fromToken].depositedPCEToken -= pcetokenAmount;
+        localTokens[toToken].depositedPCEToken += pcetokenAmount;
+
+        target.mint(account, targetTokenAmount);
+
+        emit TokensSwappedBetweenLocalTokens(
+            account, fromToken, toToken, amountToSwap, pcetokenAmount, targetTokenAmount
+        );
+    }
+
     function swapFeeFromLocalToken(
         address fromToken,
         address relayer,
@@ -484,6 +540,6 @@ contract PCEToken is
     function _authorizeUpgrade(address newImplementation) internal virtual override onlyOwner { }
 
     function version() public pure returns (string memory) {
-        return "1.0.16";
+        return "1.0.17";
     }
 }
