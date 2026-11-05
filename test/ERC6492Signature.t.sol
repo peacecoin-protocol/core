@@ -8,6 +8,7 @@ import { ExchangeAllowMethod } from "../src/lib/Enum.sol";
 import { UpgradeableBeacon } from "@openzeppelin/contracts/proxy/beacon/UpgradeableBeacon.sol";
 import { MockERC1271Wallet } from "./BytesSignatureAuthorization.t.sol";
 import { ERC6492FactoryCaller } from "../src/lib/ERC6492FactoryCaller.sol";
+import { ReentrancyGuardTransient } from "@openzeppelin/contracts/utils/ReentrancyGuardTransient.sol";
 
 /// @dev Counterfactual wallet factory: deploys a MockERC1271Wallet at a CREATE2 address.
 contract MockWalletFactory {
@@ -31,13 +32,14 @@ contract MockWalletFactory {
     }
 }
 
-/// @dev Factory that deploys the wallet and, in the same call, replays the authorization it is
-/// part of.
+/// @dev Factory that deploys the wallet and, in the same call, calls the token with armed calldata
+/// (the same authorization again, or another one).
 contract ReentrantFactory {
     MockWalletFactory public immutable inner;
     bytes public replayCall;
     address public replayTarget;
     bool public replaySucceeded;
+    bytes public replayReturnData;
 
     constructor(MockWalletFactory inner_) {
         inner = inner_;
@@ -50,7 +52,7 @@ contract ReentrantFactory {
 
     function deploy(address owner, bytes32 salt) external {
         inner.deploy(owner, salt);
-        (replaySucceeded,) = replayTarget.call(replayCall);
+        (replaySucceeded, replayReturnData) = replayTarget.call(replayCall);
     }
 }
 
@@ -288,6 +290,146 @@ contract ERC6492SignatureTest is Test {
 
         assertFalse(reentrant.replaySucceeded());
         assertEq(token.balanceOf(RECIPIENT), 5 ether);
+    }
+
+    /// @dev Relays an undeployed-account transfer whose factory, during deployment, calls `data` on the token.
+    function _relayWithFactoryCallback(bytes memory data) internal returns (ReentrantFactory reentrant) {
+        reentrant = new ReentrantFactory(factory);
+        reentrant.arm(address(token), data);
+        bytes32 nonce = keccak256("outer");
+        uint256 fee = token.getMetaTransactionFee();
+        bytes memory sig = _wrap(
+            address(reentrant),
+            abi.encodeCall(ReentrantFactory.deploy, (owner, SALT)),
+            _transferSignature(counterfactual, 1 ether, fee, nonce, OWNER_PK)
+        );
+        _relay(counterfactual, 1 ether, fee, nonce, sig);
+        assertEq(token.balanceOf(RECIPIENT), 1 ether);
+    }
+
+    function _assertGuardRejected(ReentrantFactory reentrant) internal view {
+        assertFalse(reentrant.replaySucceeded());
+        assertEq(
+            reentrant.replayReturnData(),
+            abi.encodeWithSelector(ReentrancyGuardTransient.ReentrancyGuardReentrantCall.selector)
+        );
+    }
+
+    function testFactoryCannotRunAnotherBytesAuthorization() public {
+        // A second, valid authorization with an unused nonce is rejected by the guard, not the nonce.
+        uint256 eoaPk = 0xE0A;
+        address eoa = vm.addr(eoaPk);
+        token.transfer(eoa, 10 ether);
+        bytes32 nonce2 = keccak256("second-bytes");
+        uint256 fee = token.getMetaTransactionFee();
+        ReentrantFactory reentrant = _relayWithFactoryCallback(
+            abi.encodeWithSignature(
+                "transferWithAuthorization(address,address,uint256,uint256,uint256,uint256,bytes32,bytes)",
+                eoa,
+                RECIPIENT,
+                2 ether,
+                fee,
+                0,
+                NO_EXPIRY,
+                nonce2,
+                _transferSignature(eoa, 2 ether, fee, nonce2, eoaPk)
+            )
+        );
+        _assertGuardRejected(reentrant);
+        assertFalse(token.authorizationState(eoa, nonce2));
+    }
+
+    function testFactoryCannotRunAnotherVRSAuthorization() public {
+        uint256 eoaPk = 0xE0B;
+        address eoa = vm.addr(eoaPk);
+        token.transfer(eoa, 10 ether);
+        bytes32 nonce2 = keccak256("second-vrs");
+        bytes32 structHash = keccak256(
+            abi.encode(token.TRANSFER_WITH_AUTHORIZATION_TYPEHASH(), eoa, RECIPIENT, 2 ether, 0, NO_EXPIRY, nonce2)
+        );
+        (uint8 v, bytes32 r, bytes32 s) = vm.sign(
+            eoaPk, keccak256(abi.encodePacked("\x19\x01", _domain("PeaceBaseCoin", address(token)), structHash))
+        );
+        ReentrantFactory reentrant = _relayWithFactoryCallback(
+            abi.encodeWithSignature(
+                "transferWithAuthorization(address,address,uint256,uint256,uint256,bytes32,uint8,bytes32,bytes32)",
+                eoa,
+                RECIPIENT,
+                2 ether,
+                0,
+                NO_EXPIRY,
+                nonce2,
+                v,
+                r,
+                s
+            )
+        );
+        _assertGuardRejected(reentrant);
+        assertFalse(token.authorizationState(eoa, nonce2));
+    }
+
+    function _swapToLocalHash(
+        address from,
+        uint256 value,
+        uint256 maxFee,
+        bytes32 nonce
+    )
+        internal
+        view
+        returns (bytes32)
+    {
+        return keccak256(
+            abi.encode(
+                pce.SWAP_TO_LOCAL_TOKEN_WITH_AUTHORIZATION_TYPEHASH(),
+                from,
+                address(token),
+                value,
+                uint256(0),
+                maxFee,
+                uint256(0),
+                NO_EXPIRY,
+                nonce
+            )
+        );
+    }
+
+    function testFactoryCannotRunAnotherPCETokenAuthorization() public {
+        uint256 eoaPk = 0xE0C;
+        address eoa = vm.addr(eoaPk);
+        pce.transfer(eoa, 10 ether);
+        uint256 fee = pce.getMetaTransactionFee();
+        bytes32 nonce2 = keccak256("second-pce");
+        ReentrantFactory reentrant = new ReentrantFactory(factory);
+        reentrant.arm(
+            address(pce),
+            abi.encodeCall(
+                PCEToken.swapToLocalTokenWithAuthorization,
+                (
+                    eoa,
+                    address(token),
+                    1 ether,
+                    0,
+                    fee,
+                    0,
+                    NO_EXPIRY,
+                    nonce2,
+                    _sign(eoaPk, _domain("PCE Token", address(pce)), _swapToLocalHash(eoa, 1 ether, fee, nonce2))
+                )
+            )
+        );
+        bytes32 nonce = keccak256("outer-pce");
+        bytes memory sig = _wrap(
+            address(reentrant),
+            abi.encodeCall(ReentrantFactory.deploy, (owner, SALT)),
+            _sign(OWNER_PK, _domain("PCE Token", address(pce)), _swapToLocalHash(counterfactual, 1 ether, fee, nonce))
+        );
+
+        vm.prank(RELAYER);
+        pce.swapToLocalTokenWithAuthorization(counterfactual, address(token), 1 ether, 0, fee, 0, NO_EXPIRY, nonce, sig);
+
+        _assertGuardRejected(reentrant);
+        assertFalse(pce.authorizationState(eoa, nonce2));
+        assertEq(token.balanceOf(eoa), 0);
     }
 
     function testFactoryIsNotCalledByTheToken() public {
