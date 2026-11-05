@@ -6,7 +6,7 @@ import { PCEToken } from "../src/PCEToken.sol";
 import { PCECommunityToken } from "../src/PCECommunityToken.sol";
 import { ExchangeAllowMethod } from "../src/lib/Enum.sol";
 import { UpgradeableBeacon } from "@openzeppelin/contracts/proxy/beacon/UpgradeableBeacon.sol";
-import { MockERC1271Wallet } from "./BytesSignatureAuthorization.t.sol";
+import { MockERC1271Wallet, LongSignatureWallet } from "./BytesSignatureAuthorization.t.sol";
 import { ERC6492FactoryCaller } from "../src/lib/ERC6492FactoryCaller.sol";
 import { ReentrancyGuardTransient } from "@openzeppelin/contracts/utils/ReentrancyGuardTransient.sol";
 
@@ -26,6 +26,25 @@ contract MockWalletFactory {
                 address(this),
                 salt,
                 keccak256(abi.encodePacked(type(MockERC1271Wallet).creationCode, abi.encode(owner)))
+            )
+        );
+        return address(uint160(uint256(hash)));
+    }
+}
+
+/// @dev Counterfactual factory for wallets whose signatures are not 65 bytes (like WebAuthn accounts).
+contract LongSignatureWalletFactory {
+    function deploy(address owner, bytes32 salt) external returns (address) {
+        return address(new LongSignatureWallet{ salt: salt }(owner));
+    }
+
+    function predict(address owner, bytes32 salt) external view returns (address) {
+        bytes32 hash = keccak256(
+            abi.encodePacked(
+                bytes1(0xff),
+                address(this),
+                salt,
+                keccak256(abi.encodePacked(type(LongSignatureWallet).creationCode, abi.encode(owner)))
             )
         );
         return address(uint160(uint256(hash)));
@@ -68,6 +87,25 @@ contract RecordingFactory {
     function deploy(address owner, bytes32 salt) external {
         lastCaller = msg.sender;
         inner.deploy(owner, salt);
+    }
+}
+
+/// @dev Factory that owns the community token and splits it while deploying the wallet, so the
+/// rebase factor and the fee change in the middle of signature validation.
+contract SplittingFactory {
+    MockWalletFactory public immutable inner;
+    PCEToken public immutable pce;
+    address public immutable token;
+
+    constructor(MockWalletFactory inner_, PCEToken pce_, address token_) {
+        inner = inner_;
+        pce = pce_;
+        token = token_;
+    }
+
+    function deploy(address owner, bytes32 salt) external {
+        inner.deploy(owner, salt);
+        pce.splitToken(token, PCECommunityToken(token).totalSupply());
     }
 }
 
@@ -430,6 +468,88 @@ contract ERC6492SignatureTest is Test {
         _assertGuardRejected(reentrant);
         assertFalse(pce.authorizationState(eoa, nonce2));
         assertEq(token.balanceOf(eoa), 0);
+    }
+
+    function _splittingSig(uint256 value, uint256 maxFee, bytes32 nonce) internal returns (bytes memory) {
+        SplittingFactory splitting = new SplittingFactory(factory, pce, address(token));
+        token.transferOwnership(address(splitting));
+        return _wrap(
+            address(splitting),
+            abi.encodeCall(SplittingFactory.deploy, (owner, SALT)),
+            _transferSignature(counterfactual, value, maxFee, nonce, OWNER_PK)
+        );
+    }
+
+    function testStateChangeDuringFactoryKeepsSignedDisplayAmount() public {
+        // The split doubles every display balance. The transfer must still move the signed display
+        // amount, so conversions must happen after the factory call.
+        bytes32 nonce = keccak256("split-amount");
+        bytes memory sig = _splittingSig(5 ether, type(uint256).max, nonce);
+
+        _relay(counterfactual, 5 ether, type(uint256).max, nonce, sig);
+
+        assertEq(token.rebaseFactor(), 2 ether);
+        assertEq(token.balanceOf(RECIPIENT), 5 ether);
+    }
+
+    function testFeeRaisedDuringFactoryIsCappedByMaxFee() public {
+        // The split doubles the display fee. A maxFee signed for the pre-split fee must revert.
+        uint256 feeBefore = token.getMetaTransactionFee();
+        bytes32 nonce = keccak256("split-fee");
+        bytes memory sig = _splittingSig(5 ether, feeBefore, nonce);
+
+        vm.expectRevert("Fee exceeds maxFee");
+        _relay(counterfactual, 5 ether, feeBefore, nonce, sig);
+    }
+
+    function testUndeployedAccountWithNon65ByteInnerSignature() public {
+        LongSignatureWalletFactory longFactory = new LongSignatureWalletFactory();
+        address account = longFactory.predict(owner, SALT);
+        token.transfer(account, 10 ether);
+        bytes32 nonce = keccak256("long-inner");
+        uint256 fee = token.getMetaTransactionFee();
+        bytes memory inner = abi.encode(_transferSignature(account, 1 ether, fee, nonce, OWNER_PK));
+        assertGt(inner.length, 65);
+        bytes memory sig =
+            _wrap(address(longFactory), abi.encodeCall(LongSignatureWalletFactory.deploy, (owner, SALT)), inner);
+
+        _relay(account, 1 ether, fee, nonce, sig);
+
+        assertGt(account.code.length, 0);
+        assertEq(token.balanceOf(RECIPIENT), 1 ether);
+    }
+
+    function testStateChangeDuringFactoryIsNotCountedAsSwapOutput() public {
+        // The split doubles the account's existing balance during validation. Only the swap output
+        // (1 PCE -> 2 tokens after the split) may count toward the signed minAmountOut of 3 tokens.
+        uint256 fee = pce.getMetaTransactionFee();
+        bytes32 nonce = keccak256("split-swap");
+        SplittingFactory splitting = new SplittingFactory(factory, pce, address(token));
+        token.transferOwnership(address(splitting));
+        bytes32 structHash = keccak256(
+            abi.encode(
+                pce.SWAP_TO_LOCAL_TOKEN_WITH_AUTHORIZATION_TYPEHASH(),
+                counterfactual,
+                address(token),
+                uint256(1 ether),
+                uint256(3 ether),
+                fee,
+                uint256(0),
+                NO_EXPIRY,
+                nonce
+            )
+        );
+        bytes memory sig = _wrap(
+            address(splitting),
+            abi.encodeCall(SplittingFactory.deploy, (owner, SALT)),
+            _sign(OWNER_PK, _domain("PCE Token", address(pce)), structHash)
+        );
+
+        vm.prank(RELAYER);
+        vm.expectRevert("Insufficient output amount");
+        pce.swapToLocalTokenWithAuthorization(
+            counterfactual, address(token), 1 ether, 3 ether, fee, 0, NO_EXPIRY, nonce, sig
+        );
     }
 
     function testFactoryIsNotCalledByTheToken() public {
