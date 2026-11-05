@@ -29,11 +29,11 @@ contract SwapTokensTest is Test {
 
         tokenA.transfer(USER, 100 ether);
         // Let the midnight balances that drive the daily limits settle.
-        vm.warp(block.timestamp + 1 days);
+        vm.warp(vm.getBlockTimestamp() + 1 days);
         tokenA.transfer(address(0xBEEF), 1 ether);
         vm.prank(USER);
         tokenA.transfer(address(0xBEEF), 1 ether);
-        vm.warp(block.timestamp + 1 days);
+        vm.warp(vm.getBlockTimestamp() + 1 days);
         // Refresh today's supply and balance snapshots so the limits read by the tests do not
         // change on the first swap of the day.
         tokenA.transfer(address(this), 0);
@@ -123,9 +123,9 @@ contract SwapTokensTest is Test {
     function testSwapTokensRespectsOutgoAllowList() public {
         PCECommunityToken closed =
             _createToken("Closed", "CLS", 1 ether, ExchangeAllowMethod.All, ExchangeAllowMethod.None);
-        vm.warp(block.timestamp + 1 days);
+        vm.warp(vm.getBlockTimestamp() + 1 days);
         closed.transfer(address(0xBEEF), 1 ether);
-        vm.warp(block.timestamp + 1 days);
+        vm.warp(vm.getBlockTimestamp() + 1 days);
         vm.expectRevert("Outgo exchange not allowed");
         closed.swapTokens(address(tokenB), 1 ether);
     }
