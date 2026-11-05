@@ -23,6 +23,23 @@ contract MockERC1271Wallet {
     }
 }
 
+/// @dev ERC-1271 wallet whose signatures are not 65 bytes (like WebAuthn accounts): it expects
+/// `abi.encode(ecdsaSignature)`, so ECDSA parsing of the raw payload always fails first.
+contract LongSignatureWallet {
+    address public immutable signer;
+
+    constructor(address signer_) {
+        signer = signer_;
+    }
+
+    function isValidSignature(bytes32 hash, bytes calldata signature) external view returns (bytes4) {
+        if (signature.length == 65) return bytes4(0xffffffff);
+        bytes memory inner = abi.decode(signature, (bytes));
+        (address recovered, ECDSA.RecoverError err,) = ECDSA.tryRecover(hash, inner);
+        return err == ECDSA.RecoverError.NoError && recovered == signer ? bytes4(0x1626ba7e) : bytes4(0xffffffff);
+    }
+}
+
 /// @dev Wallet that tries to write state while validating; under staticcall this must fail.
 contract StatefulERC1271Wallet {
     uint256 public calls;
@@ -208,6 +225,20 @@ contract BytesSignatureAuthorizationTest is Test {
         assertEq(tokenA.balanceOf(RECIPIENT), 5 ether);
         assertGt(pce.balanceOf(RELAYER), 0);
         assertTrue(tokenA.authorizationState(address(wallet), nonce));
+    }
+
+    function testTransferWithNon65ByteERC1271Signature() public {
+        LongSignatureWallet longWallet = new LongSignatureWallet(vm.addr(WALLET_PK));
+        tokenA.transfer(address(longWallet), 10 ether);
+        bytes32 nonce = keccak256("long-signature");
+        uint256 fee = tokenA.getMetaTransactionFee();
+        bytes memory sig = abi.encode(_signTransfer(WALLET_PK, tokenA, address(longWallet), 1 ether, fee, nonce));
+        assertGt(sig.length, 65);
+
+        _relayTransfer(tokenA, address(longWallet), 1 ether, fee, nonce, sig);
+
+        assertEq(tokenA.balanceOf(RECIPIENT), 1 ether);
+        assertTrue(tokenA.authorizationState(address(longWallet), nonce));
     }
 
     function testTransferRejectsSignatureFromOtherKey() public {
