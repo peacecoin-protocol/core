@@ -74,13 +74,19 @@ contract BytesSignatureAuthorizationTest is Test {
         pce.transfer(eoa, 100 ether);
         pce.transfer(address(wallet), 100 ether);
         // Settle midnight balances that drive the daily swap limits.
-        vm.warp(block.timestamp + 1 days);
+        vm.warp(vm.getBlockTimestamp() + 1 days);
         tokenA.transfer(address(0xBEEF), 1 ether);
         vm.prank(eoa);
         tokenA.transfer(address(0xBEEF), 1 ether);
         vm.prank(address(wallet));
         tokenA.transfer(address(0xBEEF), 1 ether);
-        vm.warp(block.timestamp + 1 days);
+        vm.warp(vm.getBlockTimestamp() + 1 days);
+        // Refresh today's snapshots so the limits read by the tests do not change on the first swap.
+        tokenA.transfer(address(this), 0);
+        vm.prank(eoa);
+        tokenA.transfer(eoa, 0);
+        vm.prank(address(wallet));
+        tokenA.transfer(address(wallet), 0);
     }
 
     function _createToken(
