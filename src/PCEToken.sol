@@ -14,6 +14,7 @@ import { ExchangeAllowMethod } from "./lib/Enum.sol";
 import { NativeMetaTransaction } from "./lib/polygon/NativeMetaTransaction.sol";
 import { ContextMixin } from "./lib/polygon/ContextMixin.sol";
 import { Math } from "@openzeppelin/contracts/utils/math/Math.sol";
+import { ReentrancyGuardTransient } from "@openzeppelin/contracts/utils/ReentrancyGuardTransient.sol";
 import { EIP712 } from "./lib/EIP712.sol";
 import { AuthorizationSignature } from "./lib/AuthorizationSignature.sol";
 
@@ -24,7 +25,8 @@ contract PCEToken is
     OwnableUpgradeable,
     ERC20BurnableUpgradeable,
     NativeMetaTransaction,
-    ContextMixin
+    ContextMixin,
+    ReentrancyGuardTransient
 {
     uint160 public nativeTokenToPceTokenRate;
     uint256 public metaTransactionGas;
@@ -464,6 +466,7 @@ contract PCEToken is
         bytes memory signature
     )
         external
+        nonReentrant
     {
         _useAuthorization(
             from,
