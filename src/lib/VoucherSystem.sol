@@ -80,6 +80,8 @@ library VoucherSystem {
     /// @dev Matches the EIP3009 event signature so observers cannot distinguish
     ///      whether the host or this library emitted it.
     event AuthorizationUsed(address indexed authorizer, bytes32 indexed nonce);
+    /// @dev Matches the EIP3009 `AuthorizationExecuted` event signature.
+    event AuthorizationExecuted(address indexed authorizer, bytes32 indexed nonce, bytes32 structHash);
 
     function registerIssuance(
         VoucherStorage storage self,
@@ -443,9 +445,8 @@ library VoucherSystem {
         require(!(block.timestamp >= validBefore), "Authorization expired");
         require(!(authStates[claimer][nonce]), "Authorization used");
 
-        bytes32 digest;
-        {
-            bytes memory data = abi.encode(
+        bytes32 structHash = keccak256(
+            abi.encode(
                 CLAIM_WITH_AUTHORIZATION_TYPEHASH,
                 claimer,
                 keccak256(bytes(issuanceId)),
@@ -453,18 +454,39 @@ library VoucherSystem {
                 validAfter,
                 validBefore,
                 nonce
-            );
-            digest = keccak256(abi.encodePacked("\x19\x01", host.DOMAIN_SEPARATOR(), keccak256(data)));
-        }
+            )
+        );
+        bytes32 digest = keccak256(abi.encodePacked("\x19\x01", host.DOMAIN_SEPARATOR(), structHash));
         require(!(ECRecover.recover(digest, v, r, s) != claimer), "Invalid signature");
         authStates[claimer][nonce] = true;
         emit AuthorizationUsed(claimer, nonce);
+        emit AuthorizationExecuted(claimer, nonce, structHash);
+
+        claimAuthorizedAndTransfer(self, claimer, issuanceId, code, proof, type(uint256).max, relayer);
+    }
+
+    /// @notice Claim for `claimer` after the host has consumed and verified the claim authorization.
+    /// @dev The caller must already have marked the nonce used and checked the signature.
+    /// `maxFee` caps the withheld fee; the `v, r, s` path passes `type(uint256).max`.
+    function claimAuthorizedAndTransfer(
+        VoucherStorage storage self,
+        address claimer,
+        string memory issuanceId,
+        string memory code,
+        bytes32[] calldata proof,
+        uint256 maxFee,
+        address relayer
+    )
+        public
+    {
+        IVoucherHost host = IVoucherHost(address(this));
 
         // Surface the `Issuance not found` error consistently with claim() instead
         // of reverting later via a zero-amount fee check on a non-existent entry.
         require(bytes(self.issuances[issuanceId].issuanceId).length != 0, "Issuance not found");
 
         uint256 displayFee = host.getMetaTransactionFee();
+        require(displayFee <= maxFee, "Fee exceeds maxFee");
         uint256 rawFee = host.displayFeeToRawBalance(displayFee);
         uint256 rawClaimAmount = host.displayBalanceToRawBalance(self.issuances[issuanceId].amountPerClaim);
         require(!(rawClaimAmount <= rawFee), "Claim amount must be greater than fee");

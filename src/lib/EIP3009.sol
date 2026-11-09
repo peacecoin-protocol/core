@@ -27,6 +27,9 @@ abstract contract EIP3009 is ERC20Upgradeable, EIP712Domain {
     mapping(address authorizer => mapping(bytes32 nonce => bool isUsed)) internal _authorizationStates;
 
     event AuthorizationUsed(address indexed authorizer, bytes32 indexed nonce);
+    /// @notice Emitted with `AuthorizationUsed` so a relayer can tell which signed message used the nonce.
+    /// @dev `structHash` is the EIP-712 struct hash (including the type hash) of the executed authorization.
+    event AuthorizationExecuted(address indexed authorizer, bytes32 indexed nonce, bytes32 structHash);
 
     function authorizationState(address authorizer, bytes32 nonce) external view returns (bool) {
         return _authorizationStates[authorizer][nonce];
@@ -73,6 +76,7 @@ abstract contract EIP3009 is ERC20Upgradeable, EIP712Domain {
 
         _authorizationStates[from][nonce] = true;
         emit AuthorizationUsed(from, nonce);
+        emit AuthorizationExecuted(from, nonce, keccak256(data));
 
         _transfer(from, to, rawAmount);
     }

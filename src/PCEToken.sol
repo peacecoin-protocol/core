@@ -14,6 +14,8 @@ import { ExchangeAllowMethod } from "./lib/Enum.sol";
 import { NativeMetaTransaction } from "./lib/polygon/NativeMetaTransaction.sol";
 import { ContextMixin } from "./lib/polygon/ContextMixin.sol";
 import { Math } from "@openzeppelin/contracts/utils/math/Math.sol";
+import { EIP712 } from "./lib/EIP712.sol";
+import { AuthorizationSignature } from "./lib/AuthorizationSignature.sol";
 
 contract PCEToken is
     UUPSUpgradeable,
@@ -80,6 +82,17 @@ contract PCEToken is
     uint256 public epochTime;
     uint256 public lastDecreaseTime;
     uint256 public lastModifiedFactor;
+
+    // --- V17: EIP-3009 style authorization nonces for the `bytes` signature functions ---
+    mapping(address authorizer => mapping(bytes32 nonce => bool isUsed)) private _authorizationStates;
+
+    /// @dev Signed under the domain {name: "PCE Token", version: "1", chainId, verifyingContract}.
+    bytes32 public constant SWAP_TO_LOCAL_TOKEN_WITH_AUTHORIZATION_TYPEHASH = keccak256(
+        "SwapToLocalTokenWithAuthorization(address from,address toToken,uint256 value,uint256 minAmountOut,uint256 maxFee,uint256 validAfter,uint256 validBefore,bytes32 nonce)"
+    );
+
+    event AuthorizationUsed(address indexed authorizer, bytes32 indexed nonce);
+    event AuthorizationExecuted(address indexed authorizer, bytes32 indexed nonce, bytes32 structHash);
 
     function initialize() public initializer {
         __ERC20_init("PCE Token", "PCE");
@@ -274,9 +287,13 @@ contract PCEToken is
     }
 
     function swapToLocalToken(address toToken, uint256 amountToSwap) public {
+        _swapToLocalToken(_msgSender(), toToken, amountToSwap);
+    }
+
+    function _swapToLocalToken(address account, address toToken, uint256 amountToSwap) internal {
         updateFactorIfNeeded();
         require(localTokens[toToken].isExists, "Target token not found");
-        require(balanceOf(_msgSender()) >= amountToSwap, "Not enough PCEToken balance");
+        require(balanceOf(account) >= amountToSwap, "Not enough PCEToken balance");
 
         PCECommunityToken target = PCECommunityToken(toToken);
         target.updateFactorIfNeeded();
@@ -288,22 +305,33 @@ contract PCEToken is
         );
         require(targetTokenAmount > 0, "Invalid amount to swap");
 
-        _transfer(_msgSender(), address(this), amountToSwap);
-        target.mint(_msgSender(), targetTokenAmount);
+        _transfer(account, address(this), amountToSwap);
+        target.mint(account, targetTokenAmount);
 
         localTokens[toToken].depositedPCEToken = localTokens[toToken].depositedPCEToken + amountToSwap;
 
-        emit TokensSwappedToLocalToken(_msgSender(), toToken, amountToSwap, targetTokenAmount);
+        emit TokensSwappedToLocalToken(account, toToken, amountToSwap, targetTokenAmount);
     }
 
     function swapFromLocalToken(address fromToken, uint256 amountToSwap) public {
+        _swapFromLocalToken(fromToken, _msgSender(), amountToSwap);
+    }
+
+    /// @notice Swap `account`'s community tokens to PCE.
+    /// @dev Only callable by the registered community token itself, for its meta-transaction swap.
+    function swapFromLocalTokenFor(address account, uint256 amountToSwap) external {
+        require(localTokens[msg.sender].isExists, "Caller must be a community token");
+        _swapFromLocalToken(msg.sender, account, amountToSwap);
+    }
+
+    function _swapFromLocalToken(address fromToken, address account, uint256 amountToSwap) internal {
         updateFactorIfNeeded();
         require(localTokens[fromToken].isExists, "Target token not found");
 
         PCECommunityToken target = PCECommunityToken(fromToken);
         target.updateFactorIfNeeded();
 
-        require(target.balanceOf(_msgSender()) >= amountToSwap, "Insufficient balance");
+        require(target.balanceOf(account) >= amountToSwap, "Insufficient balance");
 
         uint256 pcetokenAmount = Math.mulDiv(
             Math.mulDiv(amountToSwap, INITIAL_FACTOR, localTokens[fromToken].exchangeRate),
@@ -314,20 +342,20 @@ contract PCEToken is
 
         require(target.getRemainingSwapableToPCEBalance() >= amountToSwap, "Exceeds daily swap limit");
         require(
-            target.getRemainingSwapableToPCEBalanceForIndividual(_msgSender()) >= amountToSwap,
+            target.getRemainingSwapableToPCEBalanceForIndividual(account) >= amountToSwap,
             "Exceeds daily individual swap limit"
         );
 
         // Explicit underflow guard with clear error message
         require(localTokens[fromToken].depositedPCEToken >= pcetokenAmount, "Insufficient deposited PCE token reserve");
 
-        target.burnByPCEToken(_msgSender(), amountToSwap);
-        target.recordSwapToPCE(_msgSender(), amountToSwap);
-        _transfer(address(this), _msgSender(), pcetokenAmount);
+        target.burnByPCEToken(account, amountToSwap);
+        target.recordSwapToPCE(account, amountToSwap);
+        _transfer(address(this), account, pcetokenAmount);
 
         localTokens[fromToken].depositedPCEToken -= pcetokenAmount;
 
-        emit TokensSwappedFromLocalToken(_msgSender(), fromToken, amountToSwap, pcetokenAmount);
+        emit TokensSwappedFromLocalToken(account, fromToken, amountToSwap, pcetokenAmount);
     }
 
     /// @notice Move value between two registered community tokens on behalf of `account`.
@@ -414,6 +442,87 @@ contract PCEToken is
         emit FeeSwappedFromLocalToken(fromToken, relayer, communityTokenDisplayAmount, pcetokenAmount);
 
         return pcetokenAmount;
+    }
+
+    function authorizationState(address authorizer, bytes32 nonce) external view returns (bool) {
+        return _authorizationStates[authorizer][nonce];
+    }
+
+    /// @notice Swap PCE to a community token on behalf of `from`.
+    /// @dev The signature is 65-byte ECDSA (r || s || v) or ERC-1271. `minAmountOut` is compared with
+    /// the increase of `from`'s display balance of `toToken`. The fee is `getMetaTransactionFee()` in
+    /// PCE, capped by `maxFee`, and paid to the caller (the relayer).
+    function swapToLocalTokenWithAuthorization(
+        address from,
+        address toToken,
+        uint256 value,
+        uint256 minAmountOut,
+        uint256 maxFee,
+        uint256 validAfter,
+        uint256 validBefore,
+        bytes32 nonce,
+        bytes memory signature
+    )
+        external
+    {
+        _useAuthorization(
+            from,
+            validAfter,
+            validBefore,
+            nonce,
+            keccak256(
+                abi.encode(
+                    SWAP_TO_LOCAL_TOKEN_WITH_AUTHORIZATION_TYPEHASH,
+                    from,
+                    toToken,
+                    value,
+                    minAmountOut,
+                    maxFee,
+                    validAfter,
+                    validBefore,
+                    nonce
+                )
+            ),
+            signature
+        );
+
+        require(localTokens[toToken].isExists, "Target token not found");
+        uint256 fee = getMetaTransactionFee();
+        require(fee <= maxFee, "Fee exceeds maxFee");
+        require(balanceOf(from) >= value + fee, "Not enough PCEToken balance");
+
+        PCECommunityToken target = PCECommunityToken(toToken);
+        uint256 balanceBefore = target.balanceOf(from);
+        _swapToLocalToken(from, toToken, value);
+        require(target.balanceOf(from) - balanceBefore >= minAmountOut, "Insufficient output amount");
+
+        if (fee > 0) {
+            _transfer(from, _msgSender(), fee);
+        }
+    }
+
+    /// @dev The nonce is marked used before the signature check; a failed check reverts the whole call.
+    function _useAuthorization(
+        address authorizer,
+        uint256 validAfter,
+        uint256 validBefore,
+        bytes32 nonce,
+        bytes32 structHash,
+        bytes memory signature
+    )
+        internal
+    {
+        require(authorizer != address(0), "Invalid authorizer address");
+        require(block.timestamp > validAfter, "Not yet valid");
+        require(block.timestamp < validBefore, "Authorization expired");
+        require(!_authorizationStates[authorizer][nonce], "Authorization used");
+        _authorizationStates[authorizer][nonce] = true;
+        emit AuthorizationUsed(authorizer, nonce);
+        emit AuthorizationExecuted(authorizer, nonce, structHash);
+
+        bytes32 digest =
+            keccak256(abi.encodePacked("\x19\x01", EIP712.makeDomainSeparator("PCE Token", "1"), structHash));
+        require(AuthorizationSignature.isValid(authorizer, digest, signature), "Invalid signature");
     }
 
     function getNativeTokenToPceTokenRate() public view returns (uint256) {
