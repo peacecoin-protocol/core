@@ -269,7 +269,7 @@ contract PCEToken is
         DailyOutflow memory outflow = _dailyOutflows[communityToken];
         uint256 midnightDeposited = outflow.midnightDeposited;
         if (outflow.day != block.timestamp / 1 days) {
-            midnightDeposited = localTokens[communityToken].depositedPCEToken;
+            midnightDeposited = Math.min(localTokens[communityToken].depositedPCEToken, type(uint112).max);
         } else {
             used = outflow.outflowToday;
         }
