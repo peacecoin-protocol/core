@@ -327,4 +327,17 @@ contract SwapTokensTest is Test {
         (, uint256 used) = pce.getDailyPCEOutflow(address(tokenA));
         assertEq(used, 30 ether);
     }
+
+    function testRemainingAfterRateIncreaseUsesReserveUsage() public {
+        _drainReserveWithoutBurn(900 ether);
+        pce.swapFromLocalToken(address(tokenA), 10 ether);
+
+        // Adding PCE lowers the exchange rate, so the same remaining PCE is worth fewer A.
+        pce.increaseTokenValue(address(tokenA), 100 ether);
+
+        (, uint256 remainingInToken) = pce.getDailyPCEOutflowInToken(address(tokenA));
+        assertGt(remainingInToken, 0);
+        assertEq(tokenA.getRemainingSwapableToPCEBalance(), remainingInToken);
+        pce.swapFromLocalToken(address(tokenA), remainingInToken);
+    }
 }

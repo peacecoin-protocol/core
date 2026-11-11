@@ -645,13 +645,15 @@ contract PCECommunityToken is
         The balance is 0.01 times the total supply at UTC 0
     */
     function getTodaySwapableToPCEBalance() public view returns (uint256) {
-        PCEToken pceToken = PCEToken(pceAddress);
-
-        uint256 limit =
-            rawBalanceToDisplayBalance(Math.mulDiv(midnightTotalSupply, pceToken.swapableToPCERate(), BP_BASE));
         // Also capped by the PCE that may leave this token's reserve today.
-        (uint256 reserveLimit,) = pceToken.getDailyPCEOutflowInToken(address(this));
-        return Math.min(limit, reserveLimit);
+        (uint256 reserveLimit,) = PCEToken(pceAddress).getDailyPCEOutflowInToken(address(this));
+        return Math.min(_supplySwapableToPCEBalance(), reserveLimit);
+    }
+
+    function _supplySwapableToPCEBalance() internal view returns (uint256) {
+        return rawBalanceToDisplayBalance(
+            Math.mulDiv(midnightTotalSupply, PCEToken(pceAddress).swapableToPCERate(), BP_BASE)
+        );
     }
 
     /*
@@ -693,13 +695,13 @@ contract PCECommunityToken is
 
     // --- V11: Remaining swapable balance (global) ---
     function getRemainingSwapableToPCEBalance() public view returns (uint256) {
-        uint256 limit = getTodaySwapableToPCEBalance();
+        uint256 limit = _supplySwapableToPCEBalance();
         uint256 used = swappedToPCEToday;
         if (swappedToPCETodayModifiedTime == 0 || intervalDaysOf(swappedToPCETodayModifiedTime, block.timestamp, 1)) {
             used = 0;
         }
         uint256 remaining = limit > used ? limit - used : 0;
-        // Also capped by the PCE that may still leave this token's reserve today.
+        // The reserve cap tracks its own usage in PCE, so it is applied after the supply-based remainder.
         (, uint256 reserveRemaining) = PCEToken(pceAddress).getDailyPCEOutflowInToken(address(this));
         return Math.min(remaining, reserveRemaining);
     }
