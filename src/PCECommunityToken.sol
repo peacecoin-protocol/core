@@ -441,8 +441,8 @@ contract PCECommunityToken is
 
     /// @notice Swap this community token for another registered community token.
     /// @dev Routed through PCEToken so the PCE reserve moves from this token to the target
-    /// and the target `mint` is called by PCEToken. The source token's daily swap-to-PCE
-    /// limits apply because this token's reserve leaves the community.
+    /// and the target `mint` is called by PCEToken. The daily swap-to-PCE limits do not apply:
+    /// the reserve moves to the target community and no PCE leaves the protocol.
     function swapTokens(address toTokenAddress, uint256 amountToSwap) public {
         _swapTokens(_msgSender(), toTokenAddress, amountToSwap);
     }
@@ -456,13 +456,8 @@ contract PCECommunityToken is
         require(balanceOf(sender) >= amountToSwap, "Insufficient balance");
         require(isAllowOutgoExchange(toTokenAddress), "Outgo exchange not allowed");
         require(to.isAllowIncomeExchange(address(this)), "Income exchange not allowed");
-        require(getRemainingSwapableToPCEBalance() >= amountToSwap, "Exceeds daily swap limit");
-        require(
-            getRemainingSwapableToPCEBalanceForIndividual(sender) >= amountToSwap, "Exceeds daily individual swap limit"
-        );
 
         _burn(sender, displayBalanceToRawBalance(amountToSwap));
-        _recordSwapToPCE(sender, amountToSwap);
         PCEToken(pceAddress).swapBetweenLocalTokens(toTokenAddress, sender, amountToSwap);
     }
 
@@ -652,7 +647,11 @@ contract PCECommunityToken is
     function getTodaySwapableToPCEBalance() public view returns (uint256) {
         PCEToken pceToken = PCEToken(pceAddress);
 
-        return rawBalanceToDisplayBalance(Math.mulDiv(midnightTotalSupply, pceToken.swapableToPCERate(), BP_BASE));
+        uint256 limit =
+            rawBalanceToDisplayBalance(Math.mulDiv(midnightTotalSupply, pceToken.swapableToPCERate(), BP_BASE));
+        // Also capped by the PCE that may leave this token's reserve today.
+        (uint256 reserveLimit,) = pceToken.getDailyPCEOutflowInToken(address(this));
+        return Math.min(limit, reserveLimit);
     }
 
     /*
@@ -672,10 +671,6 @@ contract PCECommunityToken is
     // --- V11: Record daily swap-to-PCE usage ---
     function recordSwapToPCE(address account, uint256 displayAmount) external {
         require(_msgSender() == pceAddress, "Only PCE token");
-        _recordSwapToPCE(account, displayAmount);
-    }
-
-    function _recordSwapToPCE(address account, uint256 displayAmount) internal {
         // Global daily reset
         if (intervalDaysOf(swappedToPCETodayModifiedTime, block.timestamp, 1)) {
             swappedToPCEToday = 0;
@@ -703,7 +698,10 @@ contract PCECommunityToken is
         if (swappedToPCETodayModifiedTime == 0 || intervalDaysOf(swappedToPCETodayModifiedTime, block.timestamp, 1)) {
             used = 0;
         }
-        return limit > used ? limit - used : 0;
+        uint256 remaining = limit > used ? limit - used : 0;
+        // Also capped by the PCE that may still leave this token's reserve today.
+        (, uint256 reserveRemaining) = PCEToken(pceAddress).getDailyPCEOutflowInToken(address(this));
+        return Math.min(remaining, reserveRemaining);
     }
 
     // --- V11: Remaining swapable balance (individual) ---
@@ -1187,6 +1185,6 @@ contract PCECommunityToken is
     }
 
     function version() public pure returns (string memory) {
-        return "1.0.19";
+        return "1.0.20";
     }
 }
