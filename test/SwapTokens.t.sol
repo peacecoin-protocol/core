@@ -91,7 +91,7 @@ contract SwapTokensTest is Test {
         assertEq(pce.balanceOf(address(pce)), pceReserve);
     }
 
-    function testSwapTokensCountsTowardSourceDailyLimit() public {
+    function testSwapTokensDoesNotConsumeSourceDailyLimit() public {
         uint256 amount = 10 ether;
         uint256 globalBefore = tokenA.getRemainingSwapableToPCEBalance();
         uint256 individualBefore = tokenA.getRemainingSwapableToPCEBalanceForIndividual(USER);
@@ -99,25 +99,26 @@ contract SwapTokensTest is Test {
         vm.prank(USER);
         tokenA.swapTokens(address(tokenB), amount);
 
-        assertEq(tokenA.getRemainingSwapableToPCEBalance(), globalBefore - amount);
-        assertEq(tokenA.getRemainingSwapableToPCEBalanceForIndividual(USER), individualBefore - amount);
+        assertEq(tokenA.getRemainingSwapableToPCEBalance(), globalBefore);
+        assertEq(tokenA.getRemainingSwapableToPCEBalanceForIndividual(USER), individualBefore);
     }
 
-    function testSwapTokensRevertsOverIndividualDailyLimit() public {
-        uint256 remaining = tokenA.getRemainingSwapableToPCEBalanceForIndividual(USER);
-        assertGt(remaining, 0);
-        vm.prank(USER);
-        vm.expectRevert("Exceeds daily individual swap limit");
-        tokenA.swapTokens(address(tokenB), remaining + 1);
+    function testSwapTokensAboveIndividualDailyLimit() public {
+        uint256 amount = tokenA.getRemainingSwapableToPCEBalanceForIndividual(USER) + 1;
+        assertLe(amount, tokenA.balanceOf(USER));
 
         vm.prank(USER);
-        tokenA.swapTokens(address(tokenB), remaining);
+        tokenA.swapTokens(address(tokenB), amount);
+        assertEq(tokenB.balanceOf(USER), amount * 2);
     }
 
-    function testSwapTokensRevertsOverGlobalDailyLimit() public {
-        uint256 remaining = tokenA.getRemainingSwapableToPCEBalance();
-        vm.expectRevert("Exceeds daily swap limit");
-        tokenA.swapTokens(address(tokenB), remaining + 1);
+    function testSwapTokensAboveGlobalDailyLimit() public {
+        uint256 amount = tokenA.getRemainingSwapableToPCEBalance() + 1;
+        assertLe(amount, tokenA.balanceOf(address(this)));
+
+        uint256 balanceB = tokenB.balanceOf(address(this));
+        tokenA.swapTokens(address(tokenB), amount);
+        assertEq(tokenB.balanceOf(address(this)) - balanceB, amount * 2);
     }
 
     function testSwapTokensRespectsOutgoAllowList() public {
@@ -181,5 +182,162 @@ contract SwapTokensTest is Test {
         vm.expectRevert("Insufficient balance");
         tokenA.swapTokens(address(tokenB), balanceA + 1);
         assertEq(tokenB.balanceOf(USER), 0);
+    }
+
+    function testSwapToPCECountsTowardDailyOutflow() public {
+        uint256 remaining = pce.getRemainingDailyPCEOutflow(address(tokenA));
+        // 30% of the 1000 PCE reserve at the start of the day.
+        assertEq(remaining, 300 ether);
+
+        vm.prank(USER);
+        pce.swapFromLocalToken(address(tokenA), 10 ether);
+
+        assertEq(pce.getRemainingDailyPCEOutflow(address(tokenA)), remaining - 10 ether);
+    }
+
+    function _drainReserveWithoutBurn(uint256 pceAmount) internal {
+        // Relayer fees take PCE out of A's reserve without burning A, leaving A under-collateralized.
+        vm.prank(address(tokenA));
+        pce.swapFeeFromLocalToken(address(tokenA), address(0xFEE), pceAmount);
+        vm.warp(vm.getBlockTimestamp() + 1 days);
+        tokenA.transfer(address(this), 0);
+    }
+
+    function testSwapToPCECappedByMidnightReserve() public {
+        _drainReserveWithoutBurn(900 ether);
+
+        // The supply-based limit would be 30% of about 1000 A, but only 30 PCE may leave today.
+        (uint256 limitInToken, uint256 remainingInToken) = pce.getDailyPCEOutflowInToken(address(tokenA));
+        assertEq(limitInToken, 30 ether);
+        assertEq(remainingInToken, 30 ether);
+        assertEq(tokenA.getTodaySwapableToPCEBalance(), 30 ether);
+        assertEq(tokenA.getRemainingSwapableToPCEBalance(), 30 ether);
+
+        pce.swapFromLocalToken(address(tokenA), 30 ether);
+        assertEq(tokenA.getRemainingSwapableToPCEBalance(), 0);
+        vm.expectRevert("Exceeds daily swap limit");
+        pce.swapFromLocalToken(address(tokenA), 1);
+    }
+
+    function testPCEOutflowCheckedInPCEUnits() public {
+        _drainReserveWithoutBurn(900 ether);
+        // Even if the community token reports a larger remaining balance, PCEToken enforces the cap.
+        vm.mockCall(
+            address(tokenA),
+            abi.encodeWithSelector(PCECommunityToken.getRemainingSwapableToPCEBalance.selector),
+            abi.encode(type(uint256).max)
+        );
+        vm.expectRevert("Exceeds daily PCE outflow limit");
+        pce.swapFromLocalToken(address(tokenA), 31 ether);
+    }
+
+    function testOutflowDayBoundary() public {
+        vm.warp((vm.getBlockTimestamp() / 1 days + 1) * 1 days - 1);
+        uint256 remaining = pce.getRemainingDailyPCEOutflow(address(tokenA));
+        pce.swapToLocalToken(address(tokenA), 100 ether);
+        assertEq(pce.getRemainingDailyPCEOutflow(address(tokenA)), remaining);
+
+        vm.warp(vm.getBlockTimestamp() + 1);
+        assertEq(
+            pce.getRemainingDailyPCEOutflow(address(tokenA)), pce.getDepositedPCETokens(address(tokenA)) * 3000 / 10_000
+        );
+    }
+
+    function testSelfMadeCommunityCannotSpeedUpOutflow() public {
+        // A holder creates their own community C and moves 500 A of reserve into it.
+        PCECommunityToken own = _createToken("Own", "OWN", 1 ether, ExchangeAllowMethod.All, ExchangeAllowMethod.All);
+        tokenA.swapTokens(address(own), 500 ether);
+        assertEq(pce.getRemainingDailyPCEOutflow(address(own)), 0);
+
+        vm.warp(vm.getBlockTimestamp() + 1 days);
+        own.transfer(address(this), 0);
+        uint256 midnightDeposited = pce.getDepositedPCETokens(address(own));
+
+        // Splitting C several times does not raise what may leave C's reserve today.
+        pce.splitToken(address(own), own.totalSupply());
+        pce.splitToken(address(own), own.totalSupply());
+        own.transfer(address(this), 0);
+
+        uint256 pceBefore = pce.balanceOf(address(this));
+        pce.swapFromLocalToken(address(own), own.getRemainingSwapableToPCEBalance());
+        assertLe(pce.balanceOf(address(this)) - pceBefore, midnightDeposited * 3000 / 10_000);
+        vm.expectRevert();
+        pce.swapFromLocalToken(address(own), 1 ether);
+    }
+
+    function testDirectSwapDoesNotRaiseTodayOutflow() public {
+        uint256 remainingA = pce.getRemainingDailyPCEOutflow(address(tokenA));
+        uint256 remainingB = pce.getRemainingDailyPCEOutflow(address(tokenB));
+        uint256 depositedB = pce.getDepositedPCETokens(address(tokenB));
+
+        vm.prank(USER);
+        tokenA.swapTokens(address(tokenB), 50 ether);
+
+        // Both caps use the reserves at the start of the day.
+        assertEq(pce.getRemainingDailyPCEOutflow(address(tokenA)), remainingA);
+        assertEq(pce.getRemainingDailyPCEOutflow(address(tokenB)), remainingB);
+
+        vm.warp(vm.getBlockTimestamp() + 1 days);
+        assertEq(pce.getRemainingDailyPCEOutflow(address(tokenB)), (depositedB + 50 ether) * 3000 / 10_000);
+    }
+
+    function testSplitDoesNotReopenDailyOutflow() public {
+        pce.swapFromLocalToken(address(tokenA), tokenA.getRemainingSwapableToPCEBalanceForIndividual(address(this)));
+        uint256 remaining = pce.getRemainingDailyPCEOutflow(address(tokenA));
+
+        // Doubling the display supply raises the supply-based limit but not the reserve cap.
+        pce.splitToken(address(tokenA), tokenA.totalSupply());
+        tokenA.transfer(address(this), 0);
+
+        assertEq(pce.getRemainingDailyPCEOutflow(address(tokenA)), remaining);
+        (, uint256 remainingInToken) = pce.getDailyPCEOutflowInToken(address(tokenA));
+        assertLe(tokenA.getRemainingSwapableToPCEBalance(), remainingInToken);
+    }
+
+    function testSameDayInflowDoesNotRaiseOutflow() public {
+        uint256 remaining = pce.getRemainingDailyPCEOutflow(address(tokenA));
+
+        pce.swapToLocalToken(address(tokenA), 100 ether);
+        pce.increaseTokenValue(address(tokenA), 100 ether);
+        assertEq(pce.getRemainingDailyPCEOutflow(address(tokenA)), remaining);
+
+        vm.warp(vm.getBlockTimestamp() + 1 days);
+        assertEq(
+            pce.getRemainingDailyPCEOutflow(address(tokenA)), pce.getDepositedPCETokens(address(tokenA)) * 3000 / 10_000
+        );
+    }
+
+    function testNewTokenHasNoOutflowOnCreationDay() public {
+        PCECommunityToken fresh =
+            _createToken("Fresh", "FRS", 1 ether, ExchangeAllowMethod.All, ExchangeAllowMethod.All);
+        assertEq(pce.getRemainingDailyPCEOutflow(address(fresh)), 0);
+
+        vm.warp(vm.getBlockTimestamp() + 1 days);
+        assertEq(pce.getRemainingDailyPCEOutflow(address(fresh)), 300 ether);
+    }
+
+    function testFeeAfterCapIsNotBlockedOrCounted() public {
+        _drainReserveWithoutBurn(900 ether);
+        pce.swapFromLocalToken(address(tokenA), 30 ether);
+        assertEq(pce.getRemainingDailyPCEOutflow(address(tokenA)), 0);
+
+        vm.prank(address(tokenA));
+        pce.swapFeeFromLocalToken(address(tokenA), address(0xFEE), 1 ether);
+
+        (, uint256 used) = pce.getDailyPCEOutflow(address(tokenA));
+        assertEq(used, 30 ether);
+    }
+
+    function testRemainingAfterRateIncreaseUsesReserveUsage() public {
+        _drainReserveWithoutBurn(900 ether);
+        pce.swapFromLocalToken(address(tokenA), 10 ether);
+
+        // Adding PCE lowers the exchange rate, so the same remaining PCE is worth fewer A.
+        pce.increaseTokenValue(address(tokenA), 100 ether);
+
+        (, uint256 remainingInToken) = pce.getDailyPCEOutflowInToken(address(tokenA));
+        assertGt(remainingInToken, 0);
+        assertEq(tokenA.getRemainingSwapableToPCEBalance(), remainingInToken);
+        pce.swapFromLocalToken(address(tokenA), remainingInToken);
     }
 }

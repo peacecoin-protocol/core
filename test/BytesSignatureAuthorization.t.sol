@@ -567,6 +567,7 @@ contract BytesSignatureAuthorizationTest is Test {
         uint256 balanceA = tokenA.balanceOf(address(wallet));
         uint256 depositedA = pce.getDepositedPCETokens(address(tokenA));
         uint256 depositedB = pce.getDepositedPCETokens(address(tokenB));
+        uint256 limitBefore = tokenA.getRemainingSwapableToPCEBalanceForIndividual(address(wallet));
 
         vm.prank(RELAYER);
         tokenA.swapTokensWithAuthorization(
@@ -574,6 +575,8 @@ contract BytesSignatureAuthorizationTest is Test {
         );
 
         assertEq(tokenB.balanceOf(address(wallet)), 20 ether);
+        // Inter-community swaps do not consume the daily swap-to-PCE limits.
+        assertEq(tokenA.getRemainingSwapableToPCEBalanceForIndividual(address(wallet)), limitBefore);
         assertGe(balanceA - tokenA.balanceOf(address(wallet)), 10 ether + fee);
         uint256 relayerPCE = pce.balanceOf(RELAYER);
         assertGt(relayerPCE, 0);

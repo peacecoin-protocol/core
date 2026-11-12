@@ -14,6 +14,7 @@ import { ExchangeAllowMethod } from "./lib/Enum.sol";
 import { NativeMetaTransaction } from "./lib/polygon/NativeMetaTransaction.sol";
 import { ContextMixin } from "./lib/polygon/ContextMixin.sol";
 import { Math } from "@openzeppelin/contracts/utils/math/Math.sol";
+import { SafeCast } from "@openzeppelin/contracts/utils/math/SafeCast.sol";
 import { ReentrancyGuardTransient } from "@openzeppelin/contracts/utils/ReentrancyGuardTransient.sol";
 import { EIP712 } from "./lib/EIP712.sol";
 import { AuthorizationSignature } from "./lib/AuthorizationSignature.sol";
@@ -76,6 +77,7 @@ contract PCEToken is
     );
 
     uint256 public constant INITIAL_FACTOR = 10 ** 18;
+    uint256 private constant BP_BASE = 10_000;
     uint256 private constant Q96 = 2 ** 96;
     // 998/1000 = 0.998 (represents a 0.2% decrease)
     uint256 public constant DECREASE_RATE = 998 * (10 ** 18);
@@ -87,6 +89,16 @@ contract PCEToken is
 
     // --- V17: EIP-3009 style authorization nonces for the `bytes` signature functions ---
     mapping(address authorizer => mapping(bytes32 nonce => bool isUsed)) private _authorizationStates;
+
+    // --- V18: Daily cap on PCE leaving each community token's reserve ---
+    /// @dev Packed into one slot. `day` is the UTC day number (`block.timestamp / 1 days`).
+    struct DailyOutflow {
+        uint112 midnightDeposited;
+        uint112 outflowToday;
+        uint32 day;
+    }
+
+    mapping(address communityToken => DailyOutflow dailyOutflow) private _dailyOutflows;
 
     /// @dev Signed under the domain {name: "PCE Token", version: "1", chainId, verifyingContract}.
     bytes32 public constant SWAP_TO_LOCAL_TOKEN_WITH_AUTHORIZATION_TYPEHASH = keccak256(
@@ -241,12 +253,63 @@ contract PCEToken is
         _transfer(_msgSender(), address(this), amountToExchange);
         newToken.mint(_msgSender(), newTokenAmount);
 
+        _syncDailyOutflow(newTokenAddress);
         localTokens[newTokenAddress] = Utils.LocalToken(true, dilutionFactor, amountToExchange);
         tokens.push(newTokenAddress);
 
         newToken.transferOwnership(_msgSender());
 
         emit TokenCreated(newTokenAddress, _msgSender(), amountToExchange, newTokenAmount);
+    }
+
+    /// @notice Today's cap on PCE leaving `communityToken`'s reserve through swaps to PCE, and the
+    /// PCE already counted against it. The cap is `swapableToPCERate` of the reserve at the start of
+    /// the UTC day. Relayer fees and inter-community swaps are not counted.
+    function getDailyPCEOutflow(address communityToken) public view returns (uint256 limit, uint256 used) {
+        DailyOutflow memory outflow = _dailyOutflows[communityToken];
+        uint256 midnightDeposited = outflow.midnightDeposited;
+        if (outflow.day != block.timestamp / 1 days) {
+            midnightDeposited = Math.min(localTokens[communityToken].depositedPCEToken, type(uint112).max);
+        } else {
+            used = outflow.outflowToday;
+        }
+        limit = Math.mulDiv(midnightDeposited, swapableToPCERate, BP_BASE);
+    }
+
+    /// @notice PCE that can still leave `communityToken`'s reserve today through swaps to PCE.
+    function getRemainingDailyPCEOutflow(address communityToken) public view returns (uint256) {
+        (uint256 limit, uint256 used) = getDailyPCEOutflow(communityToken);
+        return limit > used ? limit - used : 0;
+    }
+
+    /// @notice `getDailyPCEOutflow`'s cap and remaining amount in `communityToken` display units.
+    function getDailyPCEOutflowInToken(address communityToken)
+        external
+        view
+        returns (uint256 limit, uint256 remaining)
+    {
+        (uint256 pceLimit, uint256 used) = getDailyPCEOutflow(communityToken);
+        limit = _pceToTokenDisplay(communityToken, pceLimit);
+        remaining = _pceToTokenDisplay(communityToken, pceLimit > used ? pceLimit - used : 0);
+    }
+
+    /// @dev The inverse of the `swapFromLocalToken` conversion, rounded down.
+    function _pceToTokenDisplay(address communityToken, uint256 pceAmount) internal view returns (uint256) {
+        return Math.mulDiv(
+            Math.mulDiv(pceAmount, localTokens[communityToken].exchangeRate, INITIAL_FACTOR),
+            PCECommunityToken(communityToken).getCurrentFactor(),
+            getCurrentFactor()
+        );
+    }
+
+    /// @dev Record the reserve as of the start of the UTC day. Called before every change to
+    /// `depositedPCEToken`, so the first call of a day sees the reserve as it was at midnight.
+    function _syncDailyOutflow(address communityToken) internal {
+        uint32 today = SafeCast.toUint32(block.timestamp / 1 days);
+        if (_dailyOutflows[communityToken].day != today) {
+            uint256 deposited = Math.min(localTokens[communityToken].depositedPCEToken, type(uint112).max);
+            _dailyOutflows[communityToken] = DailyOutflow(uint112(deposited), 0, today);
+        }
     }
 
     function getDepositedPCETokens(address communityToken) public view returns (uint256) {
@@ -310,6 +373,7 @@ contract PCEToken is
         _transfer(account, address(this), amountToSwap);
         target.mint(account, targetTokenAmount);
 
+        _syncDailyOutflow(toToken);
         localTokens[toToken].depositedPCEToken = localTokens[toToken].depositedPCEToken + amountToSwap;
 
         emit TokensSwappedToLocalToken(account, toToken, amountToSwap, targetTokenAmount);
@@ -351,6 +415,15 @@ contract PCEToken is
         // Explicit underflow guard with clear error message
         require(localTokens[fromToken].depositedPCEToken >= pcetokenAmount, "Insufficient deposited PCE token reserve");
 
+        _syncDailyOutflow(fromToken);
+        DailyOutflow storage outflow = _dailyOutflows[fromToken];
+        uint256 outflowToday = outflow.outflowToday + pcetokenAmount;
+        require(
+            outflowToday <= Math.mulDiv(outflow.midnightDeposited, swapableToPCERate, BP_BASE),
+            "Exceeds daily PCE outflow limit"
+        );
+        outflow.outflowToday = SafeCast.toUint112(outflowToday);
+
         target.burnByPCEToken(account, amountToSwap);
         target.recordSwapToPCE(account, amountToSwap);
         _transfer(address(this), account, pcetokenAmount);
@@ -362,7 +435,7 @@ contract PCEToken is
 
     /// @notice Move value between two registered community tokens on behalf of `account`.
     /// @dev Only callable by the source community token after it has burned `amountToSwap`
-    /// from `account` and applied its exchange and daily-limit checks. The accounting equals
+    /// from `account` and applied its exchange checks. The accounting equals
     /// `swapFromLocalToken` followed by `swapToLocalToken`: the PCE reserve moves from the
     /// source token to the target token, and the target token is minted by this contract.
     function swapBetweenLocalTokens(
@@ -398,6 +471,8 @@ contract PCEToken is
         );
         require(targetTokenAmount > 0, "Invalid amount to swap");
 
+        _syncDailyOutflow(fromToken);
+        _syncDailyOutflow(toToken);
         localTokens[fromToken].depositedPCEToken -= pcetokenAmount;
         localTokens[toToken].depositedPCEToken += pcetokenAmount;
 
@@ -439,6 +514,7 @@ contract PCEToken is
         require(localTokens[fromToken].depositedPCEToken >= pcetokenAmount, "Insufficient deposited PCE token reserve");
 
         _transfer(address(this), relayer, pcetokenAmount);
+        _syncDailyOutflow(fromToken);
         localTokens[fromToken].depositedPCEToken -= pcetokenAmount;
 
         emit FeeSwappedFromLocalToken(fromToken, relayer, communityTokenDisplayAmount, pcetokenAmount);
@@ -620,6 +696,7 @@ contract PCEToken is
         // When reserves are fully drained the proportional formula collapses to zero, which would
         // brick all future swaps. Fall back to keeping the prior rate so the community can recover.
         uint256 newRate = oldDeposited == 0 ? oldRate : Math.mulDiv(oldRate, oldDeposited, oldDeposited + pceAmount);
+        _syncDailyOutflow(communityToken);
         localTokens[communityToken].depositedPCEToken = oldDeposited + pceAmount;
         localTokens[communityToken].exchangeRate = newRate;
 
@@ -652,6 +729,6 @@ contract PCEToken is
     function _authorizeUpgrade(address newImplementation) internal virtual override onlyOwner { }
 
     function version() public pure returns (string memory) {
-        return "1.0.17";
+        return "1.0.18";
     }
 }
