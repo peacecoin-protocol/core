@@ -21,3 +21,7 @@ yarn.lock
 !broadcast
 broadcast/*
 broadcast/*/31337/
+
+# Production-compatible Ethereum Governor build
+/out-governor-mainnet/
+/cache-governor-mainnet/
