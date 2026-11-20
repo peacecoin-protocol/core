@@ -7,6 +7,10 @@ import json
 from pathlib import Path
 import urllib.request
 
+# The checks below use assert; refuse to run when Python strips them (-O or PYTHONOPTIMIZE).
+if not __debug__:
+    raise SystemExit("verify_mainnet_governor.py must not run with python -O or PYTHONOPTIMIZE")
+
 ROOT = Path(__file__).resolve().parents[1]
 IMPLEMENTATION = "0x911c1f527651374ba6546b1f1510832084af5208"
 
