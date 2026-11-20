@@ -2,6 +2,11 @@
 
 [profile.default]
   auto_detect_solc = false
+  # Profile-specific OZ versions; do not override these aliases in remappings.txt.
+  remappings = [
+    "@openzeppelin/contracts-upgradeable/=lib/openzeppelin-contracts-upgradeable/contracts/",
+    "@openzeppelin/contracts/=lib/openzeppelin-contracts/contracts/",
+  ]
   block_timestamp = 1_680_220_800 # March 31, 2023 at 00:00 GMT
   bytecode_hash = "none"
   evm_version = "cancun"
@@ -24,6 +29,33 @@
   ast = true
   build_info = true
   extra_output = ["storageLayout"]
+  # Validation reads artifacts; fork rehearsals write generated proposal JSON only under out/pip23.
+  fs_permissions = [{ access = "read", path = "./out" }, { access = "read", path = "./out-governor-mainnet" }, { access = "read-write", path = "./out/pip23" }]
+
+# Ethereum Governor must retain the verified production toolchain (OZ 5.0.2).
+[profile.governor_mainnet]
+  src = "governor-mainnet"
+  test = "governor-mainnet-test"
+  script = "governor-mainnet-script"
+  out = "out-governor-mainnet"
+  cache_path = "cache-governor-mainnet"
+  solc = "0.8.26"
+  code_size_limit = 24576
+  evm_version = "shanghai"
+  optimizer = true
+  optimizer_runs = 10_000
+  via_ir = true
+  bytecode_hash = "none"
+  cbor_metadata = true
+  use_literal_content = false
+  auto_detect_remappings = false
+  remappings = [
+    "@openzeppelin/contracts-upgradeable/=lib/openzeppelin-contracts-upgradeable-5.0.2/contracts/",
+    "@openzeppelin/contracts/=lib/openzeppelin-contracts-5.0.2/contracts/",
+    "forge-std/=lib/forge-std/src/",
+    "openzeppelin-foundry-upgrades/=lib/openzeppelin-foundry-upgrades/src/",
+    "solidity-stringutils/=lib/openzeppelin-foundry-upgrades/lib/solidity-stringutils/",
+  ]
 
 [profile.ci]
   fuzz = { runs = 10_000 }
@@ -51,6 +83,8 @@
   ]
 
 [fmt]
+  # Preserve the exact Etherscan-verified production source (core commit 2bf6ada).
+  ignore = ["governor-mainnet/PCEGovernor.sol"]
   bracket_spacing = true
   int_types = "long"
   line_length = 120
